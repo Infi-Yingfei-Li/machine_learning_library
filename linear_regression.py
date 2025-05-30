@@ -24,7 +24,7 @@ import sklearn.manifold
 import umap
 
 #%%
-class linear_regression_vanilla:
+class linear_regression:
     def __init__(self, X, Y, X_test=None, Y_test=None, X_columns=None, is_normalize=True, test_size_ratio=0.2):
         '''
         Initialize the linear regression model.
@@ -73,10 +73,19 @@ class linear_regression_vanilla:
                 self.X_test = (X_test.copy() - self.X_mean) / self.X_std
                 self.Y_test = (Y_test.copy().reshape(-1, 1) - self.Y_mean) / self.Y_std
         else:
-            self.X_train = self.X.copy()[0:int(self.n*(1-self.test_size_ratio)), :]
-            self.Y_train = self.Y.copy()[0:int(self.n*(1-self.test_size_ratio)), :]
-            self.X_test = self.X.copy()[int(self.n*(1-self.test_size_ratio)):, :]
-            self.Y_test = self.Y.copy()[int(self.n*(1-self.test_size_ratio)):, :]
+            self.X_train = X.copy()[0:int(self.n*(1-self.test_size_ratio)), :]
+            self.Y_train = Y.copy()[0:int(self.n*(1-self.test_size_ratio)), :]
+            self.X_test = X.copy()[int(self.n*(1-self.test_size_ratio)):, :]
+            self.Y_test = Y.copy()[int(self.n*(1-self.test_size_ratio)):, :]
+            if self.is_normalize:
+                self.X_train_mean = np.mean(self.X_train, axis=0)
+                self.X_train_std = np.std(self.X_train, axis=0, ddof=1)
+                self.Y_train_mean = np.mean(self.Y_train, axis=0)
+                self.Y_train_std = np.std(self.Y_train, ddof=1, axis=0)
+                self.X_train = (self.X_train - self.X_train_mean) / self.X_train_std
+                self.Y_train = (self.Y_train - self.Y_train_mean) / self.Y_train_std
+                self.X_test = (self.X_test - self.X_train_mean) / self.X_train_std
+                self.Y_test = (self.Y_test - self.Y_train_mean) / self.Y_train_std
 
     def fit(self, cov_type="nonrobust", is_output=True):
         '''
@@ -94,6 +103,18 @@ class linear_regression_vanilla:
         self.ols = sm.OLS(self.Y, sm.add_constant(self.X, prepend=True)).fit(cov_type=self.cov_type)
         if is_output:
             print(self.ols.summary())
+            plt.figure(figsize=(6, 6))
+            plt.subplot(2,1,1)
+            plt.errorbar(self.X_columns, self.ols.params[1:], yerr=self.ols.bse[1:], capsize=5)
+            plt.axhline(y=0, color='black', linestyle='--')
+            plt.xticks(rotation=45)
+            plt.ylabel("Coefficient")
+            plt.subplot(2,1,2)
+            plt.bar(self.X_columns, self.ols.pvalues[1:], color=["green" if p < 0.01 else "orange" if p < 0.05 else "red" for p in self.ols.pvalues[1:]])
+            plt.axhline(y=0.01, color='green', linestyle='--', label="p=0.01")
+            plt.axhline(y=0.05, color='orange', linestyle='--', label="p=0.05")
+            plt.legend(); plt.yscale("log"); plt.xticks(rotation=45)
+            plt.ylabel("p-value"); plt.xlabel("Feature"); plt.tight_layout()
 
     def predict(self, X):
         '''
@@ -112,7 +133,7 @@ class linear_regression_vanilla:
             Y_pred = Y_pred * self.Y_std + self.Y_mean
         return Y_pred
 
-    def visualize_data(self):
+    def visualize_data(self, methods=["pandas_describe", "raw_data_plot", "boxplot", "PCA", "MDS", "tSNE", "UMAP"]):
         '''
         Visualize the data by:
             1. summary of the data
@@ -120,86 +141,108 @@ class linear_regression_vanilla:
             3. boxplot each feature across observations
             4. low-dimensional projection
         '''
-        # describe the data
-        df = pd.DataFrame(self.X, columns=self.X_columns)
-        df["target"] = self.Y
-        print("summary of the data:")
-        print(df.describe())
+        if "pandas_describe" in methods:
+            # describe the data
+            if self.is_normalize:
+                df = pd.DataFrame(self.X * self.X_std[np.newaxis, :] + self.X_mean[np.newaxis, :], columns=self.X_columns)
+                df["target"] = self.Y * self.Y_std[np.newaxis, :] + self.Y_mean[np.newaxis, :]
+            else:
+                df = pd.DataFrame(self.X, columns=self.X_columns)
+                df["target"] = self.Y
+            print("summary of the unnormalized data:")
+            print(df.describe())
 
-        # plot each feature across observations
-        ncol = 3; nrow = (self.p + 1) // ncol + 1
-        plt.figure(figsize=(4*ncol, 3*nrow))
-        for i in range(self.p):
-            plt.subplot(nrow, ncol, i + 1)
-            plt.plot(self.X[:, i])
-            plt.ylabel(self.X_columns[i])
-        plt.subplot(nrow, ncol, self.p + 1)
-        plt.plot(self.Y, color="red")
-        plt.ylabel("target")
-        plt.suptitle("Feature across observations")
-        plt.tight_layout()
+        if "raw_data_plot" in methods:
+            # plot each feature across observations
+            ncol = 3; nrow = (self.p + 1) // ncol + 1
+            plt.figure(figsize=(4*ncol, 3*nrow))
+            for i in range(self.p):
+                plt.subplot(nrow, ncol, i + 1)
+                if self.is_normalize:
+                    plt.plot(self.X[:, i] * self.X_std[i] + self.X_mean[i])
+                else:
+                    plt.plot(self.X[:, i])
+                plt.ylabel(self.X_columns[i])
+            plt.subplot(nrow, ncol, self.p + 1)
+            if self.is_normalize:
+                plt.plot(self.Y * self.Y_std + self.Y_mean, color="red")
+            else:
+                plt.plot(self.Y, color="red")
+            plt.ylabel("target")
+            plt.suptitle("Feature across (unnormalized) observations")
+            plt.tight_layout()
 
-        # boxplot each feature across observations
-        nrow = 2; ncol = self.p//nrow + 1
-        plt.figure(figsize=(1.5*ncol, 2*nrow))
-        for i in range(self.p):
-            plt.subplot(nrow, ncol, i + 1)
-            plt.boxplot(self.X[:, i], widths=0.5, showfliers=True)
-            plt.ylabel(self.X_columns[i])
-        plt.subplot(nrow, ncol, self.p + 1)
-        plt.boxplot(self.Y, widths=0.5, showfliers=True)
-        plt.ylabel("target")
-        plt.suptitle("Feature boxplot")
-        plt.tight_layout()
+        if "boxplot" in methods:
+            # boxplot each feature across observations
+            nrow = 2; ncol = self.p//nrow + 1
+            plt.figure(figsize=(1.5*ncol, 2*nrow))
+            for i in range(self.p):
+                plt.subplot(nrow, ncol, i + 1)
+                if self.is_normalize:
+                    plt.boxplot(self.X[:, i] * self.X_std[i] + self.X_mean[i], widths=0.5, showfliers=True)
+                else:
+                    plt.boxplot(self.X[:, i], widths=0.5, showfliers=True)
+                plt.ylabel(self.X_columns[i])
+            plt.subplot(nrow, ncol, self.p + 1)
+            if self.is_normalize:
+                plt.boxplot(self.Y * self.Y_std + self.Y_mean, widths=0.5, showfliers=True)
+            else:
+                plt.boxplot(self.Y, widths=0.5, showfliers=True)
+            plt.ylabel("target")
+            plt.suptitle("Boxplot of (unnormalized) features")
+            plt.tight_layout()
 
-        if self.p > 2:
+        if self.p > 2 and any(["PCA" in methods, "MDS" in methods, "tSNE" in methods, "UMAP" in methods]):
             color_feature = self.Y.flatten()
             plt.figure(figsize=(12, 12))
+            if "PCA" in methods:
+                # projection by principal component analysis (PCA)
+                U, S, VT = np.linalg.svd(self.X, full_matrices=False)
+                V = VT.T; V = V[:, 0:2]
+                X_trans = self.X.dot(V)
+                plt.subplot(2,2,1)
+                plt.scatter(X_trans[:, 0], X_trans[:, 1], c=color_feature, cmap='RdBu_r', alpha=0.3)
+                plt.xlabel("Principal Component 1")
+                plt.ylabel("Principal Component 2")
+                plt.title("Principal component analysis (PCA)")
+                plt.colorbar(label=r"$Y$")
 
-            # projection by principal component analysis (PCA)
-            U, S, VT = np.linalg.svd(self.X, full_matrices=False)
-            V = VT.T; V = V[:, 0:2]
-            X_trans = self.X.dot(V)
-            plt.subplot(2,2,1)
-            plt.scatter(X_trans[:, 0], X_trans[:, 1], c=color_feature, cmap='RdBu_r')
-            plt.xlabel("Principal Component 1")
-            plt.ylabel("Principal Component 2")
-            plt.title("Principal component analysis (PCA)")
-            plt.colorbar(label=r"$Y$")
+            if "MDS" in methods:
+                # projection by multidimensional scaling (MDS)
+                mds = sklearn.manifold.MDS(n_components=2, dissimilarity="euclidean", random_state=None)
+                X_trans = mds.fit_transform(self.X)
+                plt.subplot(2,2,2)
+                plt.scatter(X_trans[:, 0], X_trans[:, 1], c=color_feature, cmap='RdBu_r', alpha=0.3)
+                plt.xlabel("MDS Component 1")
+                plt.ylabel("MDS Component 2")
+                plt.title("Multidimensional Scaling (MDS)")
+                plt.colorbar(label=r"$Y$")
 
-            # projection by multidimensional scaling (MDS)
-            mds = sklearn.manifold.MDS(n_components=2, dissimilarity="euclidean", random_state=None)
-            X_trans = mds.fit_transform(self.X)
-            plt.subplot(2,2,2)
-            plt.scatter(X_trans[:, 0], X_trans[:, 1], c=color_feature, cmap='RdBu_r')
-            plt.xlabel("MDS Component 1")
-            plt.ylabel("MDS Component 2")
-            plt.title("Multidimensional Scaling (MDS)")
-            plt.colorbar(label=r"$Y$")
-
-            # projection by t-distributed stochastic neighbor embedding (t-SNE)
-            tsne = sklearn.manifold.TSNE(n_components=2, random_state=None)
-            X_trans = tsne.fit_transform(self.X)
-            plt.subplot(2,2,3)
-            plt.scatter(X_trans[:, 0], X_trans[:, 1], c=color_feature, cmap='RdBu_r')
-            plt.xlabel("t-SNE Component 1")
-            plt.ylabel("t-SNE Component 2")
-            plt.title("t-distributed Stochastic Neighbor Embedding (t-SNE)")
-            plt.colorbar(label=r"$Y$")
-
-            # projection by Uniform Manifold Approximation and Projection (UMAP)
-            umap_ = umap.UMAP(n_neighbors=15, min_dist=0.1, n_components=2, metric="euclidean")
-            X_trans = umap_.fit_transform(self.X)
-            plt.subplot(2,2,4)
-            plt.scatter(X_trans[:, 0], X_trans[:, 1], c=color_feature, cmap='RdBu_r')
-            plt.xlabel("UMAP Component 1")
-            plt.ylabel("UMAP Component 2")
-            plt.title("Uniform Manifold Approximation and Projection (UMAP)")
-            plt.colorbar(label=r"$Y$")
+            if "tSNE" in methods:
+                # projection by t-distributed stochastic neighbor embedding (t-SNE)
+                tsne = sklearn.manifold.TSNE(n_components=2, random_state=None)
+                X_trans = tsne.fit_transform(self.X)
+                plt.subplot(2,2,3)
+                plt.scatter(X_trans[:, 0], X_trans[:, 1], c=color_feature, cmap='RdBu_r', alpha=0.3)
+                plt.xlabel("t-SNE Component 1")
+                plt.ylabel("t-SNE Component 2")
+                plt.title("t-distributed Stochastic Neighbor Embedding (t-SNE)")
+                plt.colorbar(label=r"$Y$")
+            
+            if "UMAP" in methods:
+                # projection by Uniform Manifold Approximation and Projection (UMAP)
+                umap_ = umap.UMAP(n_neighbors=15, min_dist=0.1, n_components=2, metric="euclidean")
+                X_trans = umap_.fit_transform(self.X)
+                plt.subplot(2,2,4)
+                plt.scatter(X_trans[:, 0], X_trans[:, 1], c=color_feature, cmap='RdBu_r', alpha=0.3)
+                plt.xlabel("UMAP Component 1")
+                plt.ylabel("UMAP Component 2")
+                plt.title("Uniform Manifold Approximation and Projection (UMAP)")
+                plt.colorbar(label=r"$Y$")
             plt.suptitle("Visualization of data by low-dimensional projection")
             plt.tight_layout()
 
-    def nonlinearity(self, smoother_type="polynomial"):
+    def nonlinearity(self, smoother_type="polynomial", method=["RESET", "residual", "partial_residual", "add_variable", "interaction_term"]):
         '''
         Diagonostic analysis on non-linearity.
         Analysis include:
@@ -239,121 +282,127 @@ class linear_regression_vanilla:
         self.nonlinearity_test = {}
 
         # Ramsey reset test (RESET)
-        result = statsmodels.stats.diagnostic.linear_reset(self.ols, power=3, use_f=False, cov_type=self.cov_type)
-        self.nonlinearity_test['RESET'] = result.pvalue
-        print("RESET test statistic: %.3f, p-value: %.4f" % (result.statistic, result.pvalue))
+        if "RESET" in method:
+            result = statsmodels.stats.diagnostic.linear_reset(self.ols, power=3, use_f=False, cov_type=self.cov_type)
+            self.nonlinearity_test['RESET'] = result.pvalue
+            print("RESET test statistic: %.3f, p-value: %.4f" % (result.statistic, result.pvalue))
 
         # plot the residuals vs features
-        ncol = 4; nrow = (self.p + 1) // ncol + 1
-        plt.figure(figsize=(3*ncol, 3*nrow))
-        plt.subplot(nrow, ncol, 1)
-        Y_pred = self.ols.predict(sm.add_constant(self.X, prepend=True))
-        residual = self.ols.resid
-        plt.scatter(Y_pred, np.power(residual, 2), s=1)
-        smoother = self._smoother(Y_pred, np.power(residual, 2), type=smoother_type)
-        plt.plot(smoother["fit_x"], smoother["fit_y"], color="red", linestyle="--", label = f"$R^2$={smoother['R2']:.2f}")
-        plt.xlabel(r"$\hat{Y}$"); plt.ylabel(r"$\hat{\varepsilon}^2$"); plt.legend()
-
-        for i in range(self.p):
-            plt.subplot(nrow, ncol, i + 2)
-            plt.scatter(self.X[:, i], np.power(residual, 2), s=1)
-            smoother = self._smoother(self.X[:, i], np.power(residual, 2), type=smoother_type)
+        if "residual" in method:
+            ncol = 4; nrow = (self.p + 1) // ncol + 1
+            plt.figure(figsize=(3*ncol, 3*nrow))
+            plt.subplot(nrow, ncol, 1)
+            Y_pred = self.ols.predict(sm.add_constant(self.X, prepend=True))
+            residual = self.ols.resid
+            plt.scatter(Y_pred, np.power(residual, 2), s=1)
+            smoother = self._smoother(Y_pred, np.power(residual, 2), type=smoother_type)
             plt.plot(smoother["fit_x"], smoother["fit_y"], color="red", linestyle="--", label = f"$R^2$={smoother['R2']:.2f}")
-            plt.xlabel(self.X_columns[i]); plt.ylabel(r"$\hat{\varepsilon}^2$"); plt.legend()
-        plt.suptitle("Residuals vs features")
-        plt.tight_layout()
+            plt.xlabel(r"$\hat{Y}$"); plt.ylabel(r"$\hat{\varepsilon}^2$"); plt.legend()
+
+            for i in range(self.p):
+                plt.subplot(nrow, ncol, i + 2)
+                plt.scatter(self.X[:, i], np.power(residual, 2), s=1)
+                smoother = self._smoother(self.X[:, i], np.power(residual, 2), type=smoother_type)
+                plt.plot(smoother["fit_x"], smoother["fit_y"], color="red", linestyle="--", label = f"$R^2$={smoother['R2']:.2f}")
+                plt.xlabel(self.X_columns[i]); plt.ylabel(r"$\hat{\varepsilon}^2$"); plt.legend()
+            plt.suptitle("Residuals vs features")
+            plt.tight_layout()
 
         # partial residual plot
-        plt.figure(figsize=(3*ncol, 3*nrow))
-        for i in range(self.p):
-            plt.subplot(nrow, ncol, i + 2)
-            partial_residual = self.ols.resid + self.ols.params[i+1] * self.X[:, i]
-            plt.scatter(self.X[:, i], partial_residual, s=1)
-            smoother = self._smoother(self.X[:, i], partial_residual, type=smoother_type)
-            plt.plot(smoother["fit_x"], smoother["fit_y"], color="red", linestyle="--", label = f"$R^2$={smoother['R2']:.2f}")
-            plt.xlabel(self.X_columns[i]); plt.ylabel(r"$\hat{\varepsilon}^2$"); plt.legend()
-        plt.suptitle("Partial residuals vs features")
-        plt.tight_layout()
+        if "partial_residual" in method:
+            plt.figure(figsize=(3*ncol, 3*nrow))
+            for i in range(self.p):
+                plt.subplot(nrow, ncol, i + 2)
+                partial_residual = self.ols.resid + self.ols.params[i+1] * self.X[:, i]
+                plt.scatter(self.X[:, i], partial_residual, s=1)
+                smoother = self._smoother(self.X[:, i], partial_residual, type=smoother_type)
+                plt.plot(smoother["fit_x"], smoother["fit_y"], color="red", linestyle="--", label = f"$R^2$={smoother['R2']:.2f}")
+                plt.xlabel(self.X_columns[i]); plt.ylabel(r"$\hat{\varepsilon}^2$"); plt.legend()
+            plt.suptitle("Partial residuals vs features")
+            plt.tight_layout()
 
         # add variable plots
-        plt.figure(figsize=(3*ncol, 3*nrow))
-        for i in range(self.p):
-            plt.subplot(nrow, ncol, i + 2)
-            X_temp = self.X[:, np.arange(self.p)!=i].reshape((self.n, -1))
-            linreg = sklearn.linear_model.LinearRegression()
-            linreg.fit(X_temp, self.Y)
-            r_y = self.Y - linreg.predict(X_temp).reshape(-1, 1)
-            linreg = sklearn.linear_model.LinearRegression()
-            linreg.fit(X_temp, self.X[:, i].reshape(-1, 1))
-            r_x = self.X[:, i].reshape(-1, 1) - linreg.predict(X_temp).reshape(-1, 1)
-            plt.scatter(r_x, r_y, s=1)
-            smoother = self._smoother(r_x, r_y, type=smoother_type)
-            plt.plot(smoother["fit_x"], smoother["fit_y"], color="red", linestyle="--", label = f"$R^2$={smoother['R2']:.2f}")
-            plt.xlabel(r"$r_x: x_j \sim x_{(-j)}$"); plt.ylabel(r"$r_y: y \sim X_{(-j)}$"); plt.legend()
-            plt.title(self.X_columns[i])
-        plt.suptitle("Add variable plot")
-        plt.tight_layout()
+        if "add_variable" in method:
+            plt.figure(figsize=(3*ncol, 3*nrow))
+            for i in range(self.p):
+                plt.subplot(nrow, ncol, i + 2)
+                X_temp = self.X[:, np.arange(self.p)!=i].reshape((self.n, -1))
+                linreg = sklearn.linear_model.LinearRegression()
+                linreg.fit(X_temp, self.Y)
+                r_y = self.Y - linreg.predict(X_temp).reshape(-1, 1)
+                linreg = sklearn.linear_model.LinearRegression()
+                linreg.fit(X_temp, self.X[:, i].reshape(-1, 1))
+                r_x = self.X[:, i].reshape(-1, 1) - linreg.predict(X_temp).reshape(-1, 1)
+                plt.scatter(r_x, r_y, s=1)
+                smoother = self._smoother(r_x, r_y, type=smoother_type)
+                plt.plot(smoother["fit_x"], smoother["fit_y"], color="red", linestyle="--", label = f"$R^2$={smoother['R2']:.2f}")
+                plt.xlabel(r"$r_x: x_j \sim x_{(-j)}$"); plt.ylabel(r"$r_y: y \sim X_{(-j)}$"); plt.legend()
+                plt.title(self.X_columns[i])
+            plt.suptitle("Add variable plot")
+            plt.tight_layout()
 
         # compare with polynomial model
-        F_hist = np.zeros((self.p, self.p)); F_hist[:] = np.nan
-        AIC_hist = np.zeros((self.p, self.p)); AIC_hist[:] = np.nan
-        BIC_hist = np.zeros((self.p, self.p)); BIC_hist[:] = np.nan
-        CV_error = np.zeros((self.p, self.p)); CV_error[:] = np.nan
-        RSS_benchmark = self.ols.ssr
-        ols = sm.OLS(self.Y_train, sm.add_constant(self.X_train, prepend=True)).fit(cov_type=self.cov_type)
-        Y_pred = ols.predict(sm.add_constant(self.X_test, prepend=True)).reshape((-1, 1))
-        CV_error_benchmark = np.sqrt(np.mean((self.Y_test - Y_pred)**2))
+        if "interaction_term" in method:
+            F_hist = np.zeros((self.p, self.p)); F_hist[:] = np.nan
+            AIC_hist = np.zeros((self.p, self.p)); AIC_hist[:] = np.nan
+            BIC_hist = np.zeros((self.p, self.p)); BIC_hist[:] = np.nan
+            CV_error = np.zeros((self.p, self.p)); CV_error[:] = np.nan
+            RSS_benchmark = self.ols.ssr
+            ols = sm.OLS(self.Y_train, sm.add_constant(self.X_train, prepend=True)).fit(cov_type=self.cov_type)
+            Y_pred = ols.predict(sm.add_constant(self.X_test, prepend=True)).reshape(-1, 1)
+            CV_error_benchmark = np.sqrt(np.mean((self.Y_test - Y_pred)**2))
 
-        for i in range(self.p):
-            for j in range(self.p):
-                X_temp = np.concatenate([self.X, (self.X[:, i]*self.X[:, j]).reshape((-1, 1))], axis=1)
-                ols = sm.OLS(self.Y, sm.add_constant(X_temp, prepend=True)).fit(cov_type=self.cov_type)
-                F_stats = (self.n-self.p-1)*(RSS_benchmark - ols.ssr)/ols.ssr
-                F_hist[i, j] = 1-scipy.stats.f.cdf(F_stats, 1, self.n-self.p-1)
-                AIC_hist[i, j] = ols.aic-self.ols.aic
-                BIC_hist[i, j] = ols.bic-self.ols.bic
-                X_temp = np.concatenate([self.X_train, (self.X_train[:, i]*self.X_train[:, j]).reshape((-1, 1))], axis=1)
-                ols = sm.OLS(self.Y_train, sm.add_constant(X_temp, prepend=True)).fit(cov_type=self.cov_type)
-                X_test_temp = np.concatenate([self.X_test, (self.X_test[:, i]*self.X_test[:, j]).reshape((-1, 1))], axis=1)
-                Y_pred = ols.predict(sm.add_constant(X_test_temp, prepend=True)).reshape(-1, 1)
-                CV_error[i, j] = (np.sqrt(np.mean((self.Y_test - Y_pred)**2)) - CV_error_benchmark)/CV_error_benchmark
+            for i in range(self.p):
+                for j in range(self.p):
+                    X_temp = np.concatenate([self.X, (self.X[:, i]*self.X[:, j]).reshape((-1, 1))], axis=1)
+                    ols = sm.OLS(self.Y, sm.add_constant(X_temp, prepend=True)).fit(cov_type=self.cov_type)
+                    F_stats = (self.n-self.p-1)*(RSS_benchmark - ols.ssr)/ols.ssr
+                    F_hist[i, j] = 1-scipy.stats.f.cdf(F_stats, 1, self.n-self.p-1)
+                    AIC_hist[i, j] = ols.aic-self.ols.aic
+                    BIC_hist[i, j] = ols.bic-self.ols.bic
+                    X_temp = np.concatenate([self.X_train, (self.X_train[:, i]*self.X_train[:, j]).reshape((-1, 1))], axis=1)
+                    ols = sm.OLS(self.Y_train, sm.add_constant(X_temp, prepend=True)).fit(cov_type=self.cov_type)
+                    X_test_temp = np.concatenate([self.X_test, (self.X_test[:, i]*self.X_test[:, j]).reshape((-1, 1))], axis=1)
+                    Y_pred = ols.predict(sm.add_constant(X_test_temp, prepend=True)).reshape(-1, 1)
+                    CV_error[i, j] = (np.sqrt(np.mean((self.Y_test - Y_pred)**2)) - CV_error_benchmark)/CV_error_benchmark
 
-        self.nonlinearity_test["interaction_term_metric"] = [F_hist, AIC_hist, BIC_hist, CV_error]
+            self.nonlinearity_test["interaction_term_metric"] = [F_hist, AIC_hist, BIC_hist, CV_error]
 
-        plt.figure(figsize=(10, 10))
-        plt.subplot(2, 2, 1)
-        colors = ['red', 'yellow', 'green']  # for <0.01, 0.01–0.05, >0.05
-        bounds = [0, 0.01, 0.05, 1]
-        cmap = matplotlib.colors.ListedColormap(colors)
-        norm = matplotlib.colors.BoundaryNorm(bounds, cmap.N)
-        plt.imshow(F_hist, cmap=cmap, norm=norm)
-        plt.xticks(range(self.p), self.X_columns, rotation=90)
-        plt.yticks(range(self.p), self.X_columns)
-        plt.colorbar()
-        plt.title(r"p-value of $F$-statistic")
+            plt.figure(figsize=(10, 10))
+            plt.subplot(2, 2, 1)
+            colors = ['red', 'yellow', 'green']  # for <0.01, 0.01–0.05, >0.05
+            bounds = [0, 0.01, 0.05, 1]
+            cmap = matplotlib.colors.ListedColormap(colors)
+            norm = matplotlib.colors.BoundaryNorm(bounds, cmap.N)
+            plt.imshow(F_hist, cmap=cmap, norm=norm)
+            plt.xticks(range(self.p), self.X_columns, rotation=90)
+            plt.yticks(range(self.p), self.X_columns)
+            plt.colorbar()
+            plt.title(r"p-value of $F$-statistic")
 
-        plt.subplot(2, 2, 2)
-        plt.imshow(AIC_hist, cmap='Reds_r', vmax=0, aspect='auto')
-        plt.xticks(range(self.p), self.X_columns, rotation=90)
-        plt.yticks(range(self.p), self.X_columns)
-        plt.colorbar()
-        plt.title(r"$AIC - AIC_{bench}$")
+            plt.subplot(2, 2, 2)
+            plt.imshow(AIC_hist, cmap='Reds_r', vmax=0, aspect='auto')
+            plt.xticks(range(self.p), self.X_columns, rotation=90)
+            plt.yticks(range(self.p), self.X_columns)
+            plt.colorbar()
+            plt.title(r"$AIC - AIC_{bench}$")
 
-        plt.subplot(2, 2, 3)    
-        plt.imshow(BIC_hist, cmap='Reds_r', vmax=0, aspect='auto')
-        plt.xticks(range(self.p), self.X_columns, rotation=90)
-        plt.yticks(range(self.p), self.X_columns)
-        plt.colorbar()
-        plt.title(r"$BIC - BIC_{bench}$")
+            plt.subplot(2, 2, 3)    
+            plt.imshow(BIC_hist, cmap='Reds_r', vmax=0, aspect='auto')
+            plt.xticks(range(self.p), self.X_columns, rotation=90)
+            plt.yticks(range(self.p), self.X_columns)
+            plt.colorbar()
+            plt.title(r"$BIC - BIC_{bench}$")
 
-        plt.subplot(2, 2, 4)
-        plt.imshow(CV_error, cmap='Reds_r', vmax=0, aspect='auto')
-        plt.xticks(range(self.p), self.X_columns, rotation=90)
-        plt.yticks(range(self.p), self.X_columns)
-        plt.colorbar()
-        plt.title(r"$(CV_{error} - CV_{error, bench})/CV_{error, bench}$")
-        plt.suptitle("Polynomial model comparison")
-        plt.tight_layout()  
+            plt.subplot(2, 2, 4)
+            plt.imshow(CV_error, cmap='Reds_r', vmax=0, aspect='auto')
+            plt.xticks(range(self.p), self.X_columns, rotation=90)
+            plt.yticks(range(self.p), self.X_columns)
+            plt.colorbar()
+            plt.title(r"$(CV_{error} - CV_{error, bench})/CV_{error, bench}$")
+            plt.suptitle("Polynomial model comparison")
+            plt.tight_layout()  
+
 
         return self.nonlinearity_test
 
@@ -390,7 +439,7 @@ class linear_regression_vanilla:
 
         if not hasattr(self, "ols"):
             raise Exception("Fit the model first.")
-        
+
         self.outlier_test = {}
         leverage = self.ols.get_influence().hat_matrix_diag
         studentized_residuals_internal = self.ols.get_influence().resid_studentized_internal
@@ -441,7 +490,7 @@ class linear_regression_vanilla:
         
         return self.outlier_test
 
-    def colinearity(self):
+    def colinearity(self, method=["pairwise_scatter", "pairwise_R2_corr", "VIF", "eigenvalue"]):
         '''
         Diagnostic analysis on colinearity.
         Analysis include:
@@ -468,44 +517,55 @@ class linear_regression_vanilla:
                 - "eigenvalue": eigenvalue spectra of correlation matrix, shape (p,)
         '''
         self.colinearity_test = {}
-        # pair-wise scatter plot of features
+        if "pairwise_scatter" in method:
+            # pair-wise scatter plot of features
+            R2 = np.zeros((self.p, self.p)); R2[:] = np.nan
+            plt.figure(figsize=(3*self.p, 3*self.p))
+            for i in range(self.p):
+                for j in range(self.p):
+                    if i != j:
+                        plt.subplot(self.p, self.p, i * self.p + j + 1)
+                        plt.scatter(self.X[:, i], self.X[:, j], s=1)
+                        linreg = sklearn.linear_model.LinearRegression()
+                        linreg.fit(self.X[:, i].reshape(-1, 1), self.X[:, j])
+                        R2[i, j] = linreg.score(self.X[:, i].reshape(-1, 1), self.X[:, j])
+                        plt.plot(self.X[:, i], linreg.predict(self.X[:, i].reshape(-1, 1)), color="red", linestyle="--", label = f"y={linreg.intercept_:.3f}+{linreg.coef_[0]:.3f}x\nR^2={R2[i, j]:.2f}")
+                        plt.xlabel(self.X_columns[i])
+                        plt.ylabel(self.X_columns[j])
+                        plt.legend()
+            plt.suptitle("Pair-wise feature scatter plot")
+            plt.tight_layout()
+            self.colinearity_test["pairwise_R2"] = R2
+
+        # plot pairwise R2 and correlation matrix
         R2 = np.zeros((self.p, self.p)); R2[:] = np.nan
-        plt.figure(figsize=(3*self.p, 3*self.p))
         for i in range(self.p):
             for j in range(self.p):
                 if i != j:
-                    plt.subplot(self.p, self.p, i * self.p + j + 1)
-                    plt.scatter(self.X[:, i], self.X[:, j], s=1)
                     linreg = sklearn.linear_model.LinearRegression()
                     linreg.fit(self.X[:, i].reshape(-1, 1), self.X[:, j])
                     R2[i, j] = linreg.score(self.X[:, i].reshape(-1, 1), self.X[:, j])
-                    plt.plot(self.X[:, i], linreg.predict(self.X[:, i].reshape(-1, 1)), color="red", linestyle="--", label = f"y={linreg.intercept_:.3f}+{linreg.coef_[0]:.3f}x\nR^2={R2[i, j]:.2f}")
-                    plt.xlabel(self.X_columns[i])
-                    plt.ylabel(self.X_columns[j])
-                    plt.legend()
-        plt.suptitle("Pair-wise feature scatter plot")
-        plt.tight_layout()
-        self.colinearity_test["pairwise_R2"] = R2
-
-        # plot pairwise R2 and correlation matrix
         corr = np.corrcoef(self.X, rowvar=False)
+        self.colinearity_test["pairwise_R2"] = R2
         self.colinearity_test["correlation"] = corr
-        plt.figure(figsize=(8, 4))
-        plt.subplot(1, 2, 1)
-        plt.title(r"Pair-wise $R^2$")
-        plt.imshow(R2, cmap='Reds', vmin=0, vmax=1, aspect='auto')
-        plt.xticks(range(self.p), self.X_columns, rotation=90)
-        plt.yticks(range(self.p), self.X_columns)
-        plt.title("Feature pair-wise R2 matrix")
-        plt.colorbar()
-        plt.subplot(1, 2, 2)
-        plt.title("Correlation matrix")
-        plt.imshow(corr, cmap='coolwarm', vmin=-1, vmax=1, aspect='auto')
-        plt.xticks(range(self.p), self.X_columns, rotation=90)
-        plt.yticks(range(self.p), self.X_columns)
-        plt.title("Feature correlation matrix")
-        plt.colorbar()
-        plt.tight_layout()
+
+        if "pairwise_R2_corr" in method:
+            plt.figure(figsize=(8, 4))
+            plt.subplot(1, 2, 1)
+            plt.title(r"Pair-wise $R^2$")
+            plt.imshow(R2, cmap='Reds', vmin=0, vmax=1, aspect='auto')
+            plt.xticks(range(self.p), self.X_columns, rotation=90)
+            plt.yticks(range(self.p), self.X_columns)
+            plt.title("Feature pair-wise R2 matrix")
+            plt.colorbar()
+            plt.subplot(1, 2, 2)
+            plt.title("Correlation matrix")
+            plt.imshow(corr, cmap='coolwarm', vmin=-1, vmax=1, aspect='auto')
+            plt.xticks(range(self.p), self.X_columns, rotation=90)
+            plt.yticks(range(self.p), self.X_columns)
+            plt.title("Feature correlation matrix")
+            plt.colorbar()
+            plt.tight_layout()
 
         # calculate variance inflation factors
         variance_inflation_factor = np.zeros(self.p)
@@ -515,33 +575,36 @@ class linear_regression_vanilla:
             R2 = linreg.score(self.X[:, np.arange(self.p) != i], self.X[:, i])
             variance_inflation_factor[i] = 1 / (1 - R2)
         self.colinearity_test["variance_inflation_factor"] = variance_inflation_factor
-        plt.figure(figsize=(8, 3))
-        plt.subplot(1, 2, 1)
-        plt.bar(range(self.p), variance_inflation_factor, color=["green" if vif < 5 else "orange" if vif < 10 else "red" for vif in variance_inflation_factor])
-        plt.xticks(range(self.p), self.X_columns, rotation=90)
-        plt.ylabel("variance inflation factor")
-        plt.axhline(y=10, color='r', linestyle='--', label="Warning")
-        plt.axhline(y=5, color='orange', linestyle='--', label="Caution")
-        plt.axhline(y=2.5, color='green', linestyle='--', label="Acceptable")
-        plt.yscale("log")
-        plt.title("Variance Inflation Factor")
-        plt.legend()
+
+        if "VIF" in method:
+            plt.figure(figsize=(8, 3))
+            plt.subplot(1, 2, 1)
+            plt.bar(range(self.p), variance_inflation_factor, color=["green" if vif < 5 else "orange" if vif < 10 else "red" for vif in variance_inflation_factor])
+            plt.xticks(range(self.p), self.X_columns, rotation=90)
+            plt.ylabel("variance inflation factor")
+            plt.axhline(y=10, color='r', linestyle='--', label="Warning")
+            plt.axhline(y=5, color='orange', linestyle='--', label="Caution")
+            plt.axhline(y=2.5, color='green', linestyle='--', label="Acceptable")
+            plt.yscale("log")
+            plt.title("Variance Inflation Factor")
+            plt.legend()
 
         # correlation matrix structure
-        plt.subplot(1, 2, 2)
-        S = np.linalg.svd(self.X, compute_uv=False)
-        self.colinearity_test["eigenvalue"] = np.abs(S)**2/(self.n-1)
-        plt.plot(range(min(self.n, self.p)), np.abs(S)**2/(self.n-1), "o-")
-        plt.fill_between(range(min(self.n, self.p)), (1-np.sqrt(self.p/self.n))**2, (1+np.sqrt(self.p/self.n))**2, color="red", alpha=0.2, label="Marchenko-Pastur")
-        plt.xlabel("index")
-        plt.ylabel("eigenvalue of correlation matrix")
-        plt.legend(title="condition number: %.2f" % (np.max(np.abs(S)**2/(self.n-1))/np.min(np.abs(S)**2/(self.n-1))))
-        plt.title("correlation matrix \n eigenvalue spectra")
-        plt.tight_layout()
+        if "eigenvalue" in method:
+            plt.subplot(1, 2, 2)
+            S = np.linalg.svd(self.X, compute_uv=False)
+            self.colinearity_test["eigenvalue"] = np.abs(S)**2/(self.n-1)
+            plt.plot(range(min(self.n, self.p)), np.abs(S)**2/(self.n-1), "o-")
+            plt.fill_between(range(min(self.n, self.p)), (1-np.sqrt(self.p/self.n))**2, (1+np.sqrt(self.p/self.n))**2, color="red", alpha=0.2, label="Marchenko-Pastur")
+            plt.xlabel("index")
+            plt.ylabel("eigenvalue of correlation matrix")
+            plt.legend(title="condition number: %.2f" % (np.max(np.abs(S)**2/(self.n-1))/np.min(np.abs(S)**2/(self.n-1))))
+            plt.title("correlation matrix \n eigenvalue spectra")
+            plt.tight_layout()
 
         return self.colinearity_test
 
-    def homoscedasticity(self):     
+    def homoscedasticity(self, method=["residual_vs_feature_plot", "test", "Box-Cox", "Yeo-Johnson"]):     
         '''
         Diagnostic analysis on homoscedasticity.
         Analysis include:
@@ -593,130 +656,136 @@ class linear_regression_vanilla:
         '''
         if not hasattr(self, "ols"):
             raise Exception("Fit the model first.")
-        #print("------ Homoscedasticity test ------")
         residuals = self.ols.resid.reshape(-1, 1)
         self.homoscedasticity_test = {}
-        # plot the residuals vs features
-        ncol = 4
-        nrow = (self.p + 1) // ncol + 1
-        plt.figure(figsize=(3*ncol, 3*nrow))
-        for i in range(self.p):
-            plt.subplot(nrow, ncol, i + 1)
-            plt.scatter(self.X[:, i], np.power(residuals, 2), s=1)
-            linreg = sklearn.linear_model.LinearRegression()
-            linreg.fit(self.X[:, i].reshape(-1, 1), np.power(residuals, 2))
-            R2 = linreg.score(self.X[:, i].reshape(-1, 1), np.power(residuals, 2))
-            plt.plot(self.X[:, i], linreg.predict(self.X[:, i].reshape(-1, 1)), color="red", linestyle="--", label = r"$y=%.2f+%.2fx$"% (linreg.intercept_, linreg.coef_[0]) + "\n $R^2$=%.2f" % R2)
+
+        if "residual_vs_feature_plot" in method:
+            # plot the residuals vs features
+            ncol = 4
+            nrow = (self.p + 1) // ncol + 1
+            plt.figure(figsize=(3*ncol, 3*nrow))
+            for i in range(self.p):
+                plt.subplot(nrow, ncol, i + 1)
+                plt.scatter(self.X[:, i], np.power(residuals, 2), s=1)
+                linreg = sklearn.linear_model.LinearRegression()
+                linreg.fit(self.X[:, i].reshape(-1, 1), np.power(residuals, 2))
+                R2 = linreg.score(self.X[:, i].reshape(-1, 1), np.power(residuals, 2))
+                plt.plot(self.X[:, i], linreg.predict(self.X[:, i].reshape(-1, 1)), color="red", linestyle="--", label = r"$y=%.2f+%.2fx$"% (linreg.intercept_, linreg.coef_[0]) + "\n $R^2$=%.2f" % R2)
+                plt.legend()
+                plt.xlabel(self.X_columns[i])
+                plt.ylabel(r"$\hat{\varepsilon}^2$")
+                plt.axhline(y=0, color='gray', linestyle='--')
+            plt.suptitle("Homoscedasticity: residuals vs X and Y")
+            plt.tight_layout()
+
+        if "test" in method:
+            test_name = []; test_p_value = []
+            # Heteroscedasticity test -- Breuch-Pagan test
+            bp_test_statistic, bp_p_value, _, _ = sms.het_breuschpagan(residuals, sm.add_constant(self.X, prepend=True), robust=True)
+            test_name.append("Breusch-Pagan\n" + r"$\varepsilon^2 \sim X$")
+            test_p_value.append(bp_p_value)
+            self.homoscedasticity_test["Breusch-Pagan"] = bp_p_value
+            #print("Breusch-Pagan test statistic: %.4f, p-value: %.4f" % (bp_test_statistic, bp_p_value))
+
+            # Heteroscedasticity test -- Park test
+            if self.X.flatten().min() <= 0:
+                park_test_statistic, park_test_pvalue = np.nan, np.nan
+            else:
+                model = sm.OLS(np.log(residuals**2), np.log(sm.add_constant(self.X, prepend=True))).fit()
+                park_test_statistic, park_test_pvalue = model.fvalue, model.f_pvalue
+            test_name.append("Park\n" + r"$\log(\varepsilon^2) \sim \log(X)$")
+            test_p_value.append(park_test_pvalue)
+            self.homoscedasticity_test["Park"] = park_test_pvalue
+            #print("Park test statistic: %.4f, p-value: %.4f" % (park_test_statistic, park_test_pvalue))
+
+            # Heteroscedasticity test -- White test
+            white_test_statistic, white_p_value, _, _ = sms.het_white(residuals, sm.add_constant(self.X, prepend=True))
+            test_name.append("White\n" + r"$\varepsilon^2 \sim X + X_iX_j$")
+            test_p_value.append(white_p_value)
+            self.homoscedasticity_test["White"] = white_p_value
+            #print("White test statistic: %.4f, p-value: %.4f" % (white_test_statistic, white_p_value))
+
+            # Heteroscedasticity test -- Goldfeld-Quantdt test
+            gf_p_value = 1; factor_idx = None
+            for i in range(self.p):
+                gf_test_statistic_temp, gf_p_value_temp, _ = sms.het_goldfeldquandt(residuals.flatten(), self.X[:, i].reshape((-1, 1)))
+                if gf_p_value_temp < gf_p_value:
+                    gf_test_statistic, gf_p_value = gf_test_statistic_temp, gf_p_value_temp
+                    factor_idx = i
+
+            #gf_test_statistic, gf_p_value, _ = sms.het_goldfeldquandt(residuals, sm.add_constant(self.X, prepend=True))
+            test_name.append("Goldfeld-Quantdt \n" + r"$\sigma^2_{large}/\sigma^2_{small}$")
+            test_p_value.append(gf_p_value)
+            self.homoscedasticity_test["Goldfeld-Quantdt"] = gf_p_value
+            #print("Goldfeld test (sorted by " + self.X_columns[factor_idx] + ") statistic: %.4f, p-value: %.4f" % (gf_test_statistic, gf_p_value) )
+
+            # Heteroscedasticity test -- Harrison-McCabe test
+            sorted_indices = np.argsort(residuals.flatten())
+            sorted_residuals = residuals[sorted_indices, :]
+            mid = len(sorted_residuals) // 2
+            group1 = sorted_residuals[:mid, :]; var1 = np.var(group1, ddof=1)
+            group2 = sorted_residuals[mid:, :]; var2 = np.var(group2, ddof=1)
+            F = max(var1, var2) / min(var1, var2)
+            df1 = len(group1) - self.p; df2 = len(group2) - self.p
+            p_value = 1 - scipy.stats.f.cdf(F, df1, df2)
+            hm_test_statistic, hm_test_pvalue = F, p_value
+            test_name.append("Harrison-McCabe \n" + r"$\sigma^2_{large}/\sigma^2_{small}$")
+            test_p_value.append(hm_test_pvalue)
+            self.homoscedasticity_test["Harrison-McCabe"] = hm_test_pvalue
+            #print("Harrison-McCabe test statistic: %.4f, p-value: %.4f" % (hm_test_statistic, hm_test_pvalue))
+
+            plt.figure(figsize=(8,3))
+            plt.bar(test_name, test_p_value, color=["green" if p>0.05 else "orange" if p>0.01 else "red" for p in test_p_value])
+            x_min = plt.gca().get_xlim()[0]; x_max = plt.gca().get_xlim()[1]
+            plt.hlines(y=0.05, xmin=x_min, xmax=x_max, color='green', linestyle='--', label="homoscedasticity")
+            plt.hlines(y=0.01, xmin=x_min, xmax=x_max, color='orange', linestyle='--', label="caution")
+            plt.hlines(y=0.001, xmin=x_min, xmax=x_max, color='red', linestyle='--', label="heteroscedasticity")
             plt.legend()
-            plt.xlabel(self.X_columns[i])
-            plt.ylabel(r"$\hat{\varepsilon}^2$")
-            plt.axhline(y=0, color='gray', linestyle='--')
-        plt.suptitle("Homoscedasticity: residuals vs X and Y")
-        plt.tight_layout()
+            plt.ylabel("p-value")
+            plt.yscale("log")
+            plt.ylim(max(plt.gca().get_ylim()[0], -5), 1)
+            plt.title("Homoscedasticity test")
+            plt.tight_layout()
 
-        test_name = []; test_p_value = []
-        # Heteroscedasticity test -- Breuch-Pagan test
-        bp_test_statistic, bp_p_value, _, _ = sms.het_breuschpagan(residuals, sm.add_constant(self.X, prepend=True), robust=True)
-        test_name.append("Breusch-Pagan\n" + r"$\varepsilon^2 \sim X$")
-        test_p_value.append(bp_p_value)
-        self.homoscedasticity_test["Breusch-Pagan"] = bp_p_value
-        #print("Breusch-Pagan test statistic: %.4f, p-value: %.4f" % (bp_test_statistic, bp_p_value))
+        if "Box-Cox" in method:
+            # Box-Cox transformation
+            if any(self.Y <= 0):
+                print("Box-Cox transformation is not applicable because Y exists negative values.")
+            else:
+                lambda_ = np.linspace(-10, 10, 1000)
+                log_likelihood = np.zeros(lambda_.shape)
+                for i in range(len(lambda_)):
+                    Y_trans = scipy.stats.boxcox(self.Y, lmbda=lambda_[i])
+                    ols = sm.OLS(Y_trans, sm.add_constant(self.X, prepend=True)).fit()
+                    residual = Y_trans - ols.predict(sm.add_constant(self.X, prepend=True)).reshape(-1, 1)
+                    log_likelihood[i] = -0.5*self.n*np.log(np.mean(np.power(residual, 2))) + (lambda_[i] - 1)*np.sum(np.log(self.Y))
+                plt.figure(figsize=(6, 3))
+                plt.plot(lambda_, log_likelihood)
+                plt.vlines(lambda_[np.argmax(log_likelihood)], ymin=plt.gca().get_ylim()[0], ymax=plt.gca().get_ylim()[1], color="red", linestyle="--", label=r"$\lambda^*$"+"=%.3f" % lambda_[np.argmax(log_likelihood)])
+                plt.xlabel("power"); plt.ylabel("log-likelihood")
+                plt.legend()
+                plt.title("Box-Cox transformation")
+                self.homoscedasticity_test["Box-Cox"] = lambda_[np.argmax(log_likelihood)]
 
-        # Heteroscedasticity test -- Park test
-        if self.X.flatten().min() <= 0:
-            park_test_statistic, park_test_pvalue = np.nan, np.nan
-        else:
-            model = sm.OLS(np.log(residuals**2), np.log(sm.add_constant(self.X, prepend=True))).fit()
-            park_test_statistic, park_test_pvalue = model.fvalue, model.f_pvalue
-        test_name.append("Park\n" + r"$\log(\varepsilon^2) \sim \log(X)$")
-        test_p_value.append(park_test_pvalue)
-        self.homoscedasticity_test["Park"] = park_test_pvalue
-        #print("Park test statistic: %.4f, p-value: %.4f" % (park_test_statistic, park_test_pvalue))
-
-        # Heteroscedasticity test -- White test
-        white_test_statistic, white_p_value, _, _ = sms.het_white(residuals, sm.add_constant(self.X, prepend=True))
-        test_name.append("White\n" + r"$\varepsilon^2 \sim X + X_iX_j$")
-        test_p_value.append(white_p_value)
-        self.homoscedasticity_test["White"] = white_p_value
-        #print("White test statistic: %.4f, p-value: %.4f" % (white_test_statistic, white_p_value))
-
-        # Heteroscedasticity test -- Goldfeld-Quantdt test
-        gf_p_value = 1; factor_idx = None
-        for i in range(self.p):
-            gf_test_statistic_temp, gf_p_value_temp, _ = sms.het_goldfeldquandt(residuals.flatten(), self.X[:, i].reshape((-1, 1)))
-            if gf_p_value_temp < gf_p_value:
-                gf_test_statistic, gf_p_value = gf_test_statistic_temp, gf_p_value_temp
-                factor_idx = i
-
-        #gf_test_statistic, gf_p_value, _ = sms.het_goldfeldquandt(residuals, sm.add_constant(self.X, prepend=True))
-        test_name.append("Goldfeld-Quantdt \n" + r"$\sigma^2_{large}/\sigma^2_{small}$")
-        test_p_value.append(gf_p_value)
-        self.homoscedasticity_test["Goldfeld-Quantdt"] = gf_p_value
-        #print("Goldfeld test (sorted by " + self.X_columns[factor_idx] + ") statistic: %.4f, p-value: %.4f" % (gf_test_statistic, gf_p_value) )
-
-        # Heteroscedasticity test -- Harrison-McCabe test
-        sorted_indices = np.argsort(residuals.flatten())
-        sorted_residuals = residuals[sorted_indices, :]
-        mid = len(sorted_residuals) // 2
-        group1 = sorted_residuals[:mid, :]; var1 = np.var(group1, ddof=1)
-        group2 = sorted_residuals[mid:, :]; var2 = np.var(group2, ddof=1)
-        F = max(var1, var2) / min(var1, var2)
-        df1 = len(group1) - self.p; df2 = len(group2) - self.p
-        p_value = 1 - scipy.stats.f.cdf(F, df1, df2)
-        hm_test_statistic, hm_test_pvalue = F, p_value
-        test_name.append("Harrison-McCabe \n" + r"$\sigma^2_{large}/\sigma^2_{small}$")
-        test_p_value.append(hm_test_pvalue)
-        self.homoscedasticity_test["Harrison-McCabe"] = hm_test_pvalue
-        #print("Harrison-McCabe test statistic: %.4f, p-value: %.4f" % (hm_test_statistic, hm_test_pvalue))
-
-        plt.figure(figsize=(8,3))
-        plt.plot(test_name, test_p_value, "-o")
-        plt.fill_between(test_name, 0.05, 1, alpha=0.2, color="green", label="homoscedasticity \n (constant-variance)")
-        plt.fill_between(test_name, 0, 0.01, alpha=0.2, color="red", label="heteroscedasticity \n (nonconstant-variance)")
-        plt.legend()
-        plt.ylabel("p-value")
-        #plt.yscale("log")
-        plt.ylim(plt.gca().get_ylim()[0], 1)
-        plt.title("Homoscedasticity test")
-        plt.tight_layout()
-
-        # Box-Cox transformation
-        if any(self.Y <= 0):
-            print("Box-Cox transformation is not applicable because Y exists negative values.")
-        else:
+        if "Yeo-Johnson" in method:
+            # Yeo-Johnson transformation
             lambda_ = np.linspace(-10, 10, 1000)
             log_likelihood = np.zeros(lambda_.shape)
             for i in range(len(lambda_)):
-                Y_trans = scipy.stats.boxcox(self.Y, lmbda=lambda_[i])
+                Y_trans = scipy.stats.yeojohnson(self.Y, lmbda=lambda_[i])
                 ols = sm.OLS(Y_trans, sm.add_constant(self.X, prepend=True)).fit()
                 residual = Y_trans - ols.predict(sm.add_constant(self.X, prepend=True)).reshape(-1, 1)
-                log_likelihood[i] = -0.5*self.n*np.log(np.mean(np.power(residual, 2))) + (lambda_[i] - 1)*np.sum(np.log(self.Y))
+                pos_idx = np.where(self.Y >= 0)[0]; neg_idx = np.where(self.Y < 0)[0]
+                log_likelihood[i] = -0.5*self.n*np.log(np.mean(np.power(residual, 2))) + (lambda_[i]-1)*np.sum(np.log(self.Y[pos_idx, :]+1)) + (1-lambda_[i])*np.sum(np.log(-self.Y[neg_idx, :]+1))
             plt.figure(figsize=(6, 3))
             plt.plot(lambda_, log_likelihood)
             plt.vlines(lambda_[np.argmax(log_likelihood)], ymin=plt.gca().get_ylim()[0], ymax=plt.gca().get_ylim()[1], color="red", linestyle="--", label=r"$\lambda^*$"+"=%.3f" % lambda_[np.argmax(log_likelihood)])
             plt.xlabel("power"); plt.ylabel("log-likelihood")
             plt.legend()
-            plt.title("Box-Cox transformation")
-            self.homoscedasticity_test["Box-Cox"] = lambda_[np.argmax(log_likelihood)]
+            plt.title("Yeo-Johnson transformation")
+            self.homoscedasticity_test["Yeo-Johnson"] = lambda_[np.argmax(log_likelihood)]
 
-        # Yeo-Johnson transformation
-        lambda_ = np.linspace(-10, 10, 1000)
-        log_likelihood = np.zeros(lambda_.shape)
-        for i in range(len(lambda_)):
-            Y_trans = scipy.stats.yeojohnson(self.Y, lmbda=lambda_[i])
-            ols = sm.OLS(Y_trans, sm.add_constant(self.X, prepend=True)).fit()
-            residual = Y_trans - ols.predict(sm.add_constant(self.X, prepend=True)).reshape(-1, 1)
-            pos_idx = np.where(self.Y >= 0)[0]; neg_idx = np.where(self.Y < 0)[0]
-            log_likelihood[i] = -0.5*self.n*np.log(np.mean(np.power(residual, 2))) + (lambda_[i]-1)*np.sum(np.log(self.Y[pos_idx, :]+1)) + (1-lambda_[i])*np.sum(np.log(-self.Y[neg_idx, :]+1))
-        plt.figure(figsize=(6, 3))
-        plt.plot(lambda_, log_likelihood)
-        plt.vlines(lambda_[np.argmax(log_likelihood)], ymin=plt.gca().get_ylim()[0], ymax=plt.gca().get_ylim()[1], color="red", linestyle="--", label=r"$\lambda^*$"+"=%.3f" % lambda_[np.argmax(log_likelihood)])
-        plt.xlabel("power"); plt.ylabel("log-likelihood")
-        plt.legend()
-        plt.title("Yeo-Johnson transformation")
-        self.homoscedasticity_test["Yeo-Johnson"] = lambda_[np.argmax(log_likelihood)]
-
-    def test_residual_normality_independence(self, lag_max=1):
+    def test_residual_normality_independence(self, method=["Q-Q plot", "test"], lag_max=1):
         '''
         Diagnostic analysis on residual normality and independence.
         Analysis include:
@@ -752,74 +821,76 @@ class linear_regression_vanilla:
         self.residual_normal_independent_test = {}
         residuals = self.ols.resid.reshape(-1, 1)
 
-        # Q-Q plot
-        plt.figure(figsize=(4, 4))
-        scipy.stats.probplot(residuals.flatten(), dist="norm", plot=plt)
-        plt.title("Q-Q plot of residuals")
-        plt.xlabel("theoretical quantiles"); plt.ylabel("sample quantiles")
+        if "Q-Q plot" in method:
+            # Q-Q plot
+            plt.figure(figsize=(4, 4))
+            scipy.stats.probplot(residuals.flatten(), dist="norm", plot=plt)
+            plt.title("Q-Q plot of residuals")
+            plt.xlabel("theoretical quantiles"); plt.ylabel("sample quantiles")
 
-        # Shapiro-Wilk test for normality
-        shapiro_test_statistic, shapiro_p_value = scipy.stats.shapiro(residuals.flatten())
-        self.residual_normal_independent_test["Shapiro-Wilk"] = shapiro_p_value
+        if "test" in method:
+            # Shapiro-Wilk test for normality
+            shapiro_test_statistic, shapiro_p_value = scipy.stats.shapiro(residuals.flatten())
+            self.residual_normal_independent_test["Shapiro-Wilk"] = shapiro_p_value
 
-        # Anderson-Darling test for normality
-        result = scipy.stats.anderson(residuals.flatten(), dist="norm")
-        anderson_p_value = np.interp(result.statistic, result.critical_values, result.significance_level)/100
-        self.residual_normal_independent_test["Anderson-Darling"] = anderson_p_value
+            # Anderson-Darling test for normality
+            result = scipy.stats.anderson(residuals.flatten(), dist="norm")
+            anderson_p_value = np.interp(result.statistic, result.critical_values, result.significance_level)/100
+            self.residual_normal_independent_test["Anderson-Darling"] = anderson_p_value
 
-        # Jarque-Bera test for normality
-        jarque_bera_test_statistic, jarque_bera_p_value = scipy.stats.jarque_bera(residuals.flatten())
-        self.residual_normal_independent_test["Jarque-Bera"] = jarque_bera_p_value
+            # Jarque-Bera test for normality
+            jarque_bera_test_statistic, jarque_bera_p_value = scipy.stats.jarque_bera(residuals.flatten())
+            self.residual_normal_independent_test["Jarque-Bera"] = jarque_bera_p_value
 
-        # Durbin-Watson test for independence
-        durbin_watson_test_statistic = float(sms.durbin_watson(residuals))
-        if np.abs(durbin_watson_test_statistic-2) > 1:
-            durbin_watson_p_value = 0.01
-        elif np.abs(durbin_watson_test_statistic-2) > 0.2:
-            durbin_watson_p_value = 0.05
-        else:
-            durbin_watson_p_value = 0.5
-        self.residual_normal_independent_test["Durbin-Watson"] = durbin_watson_p_value
+            # Durbin-Watson test for independence
+            durbin_watson_test_statistic = float(sms.durbin_watson(residuals))
+            if np.abs(durbin_watson_test_statistic-2) > 1:
+                durbin_watson_p_value = 0.01
+            elif np.abs(durbin_watson_test_statistic-2) > 0.2:
+                durbin_watson_p_value = 0.05
+            else:
+                durbin_watson_p_value = 0.5
+            self.residual_normal_independent_test["Durbin-Watson"] = durbin_watson_p_value
 
-        # Breusch-Godfrey test for independence
-        result = sms.acorr_breusch_godfrey(self.ols, nlags=lag_max, store=False)
-        breusch_godfrey_test_statistic, breusch_godfrey_p_value = result[0], result[1]
-        self.residual_normal_independent_test["Breusch-Godfrey"] = breusch_godfrey_p_value
+            # Breusch-Godfrey test for independence
+            result = sms.acorr_breusch_godfrey(self.ols, nlags=lag_max, store=False)
+            breusch_godfrey_test_statistic, breusch_godfrey_p_value = result[0], result[1]
+            self.residual_normal_independent_test["Breusch-Godfrey"] = breusch_godfrey_p_value
 
-        # Ljung-Box test for independence
-        result = sms.acorr_ljungbox(residuals, lags=lag_max, return_df=False).to_numpy()
-        self.residual_normal_independent_test["Ljung-Box"] = np.min(result[:, 1])
-        
-        # Wald-Wolfowitz test for independence
-        def wald_wolfowitz_test(data):
-            median = np.median(data)
-            signs = ['+' if x > median else '-' for x in data]
-            runs = 1
-            for i in range(1, len(signs)):
-                if signs[i] != signs[i-1]:
-                    runs += 1
-            n_pos = signs.count('+'); n_neg = signs.count('-')
+            # Ljung-Box test for independence
+            result = sms.acorr_ljungbox(residuals, lags=lag_max, return_df=False).to_numpy()
+            self.residual_normal_independent_test["Ljung-Box"] = np.min(result[:, 1])
+            
+            # Wald-Wolfowitz test for independence
+            def wald_wolfowitz_test(data):
+                median = np.median(data)
+                signs = ['+' if x > median else '-' for x in data]
+                runs = 1
+                for i in range(1, len(signs)):
+                    if signs[i] != signs[i-1]:
+                        runs += 1
+                n_pos = signs.count('+'); n_neg = signs.count('-')
 
-            expected_runs = ((2 * n_pos * n_neg) / (n_pos + n_neg)) + 1
-            std_runs = np.sqrt((2 * n_pos * n_neg * (2 * n_pos * n_neg - n_pos - n_neg)) /
-                            (((n_pos + n_neg)**2) * (n_pos + n_neg - 1)))
+                expected_runs = ((2 * n_pos * n_neg) / (n_pos + n_neg)) + 1
+                std_runs = np.sqrt((2 * n_pos * n_neg * (2 * n_pos * n_neg - n_pos - n_neg)) /
+                                (((n_pos + n_neg)**2) * (n_pos + n_neg - 1)))
 
-            z = (runs - expected_runs) / std_runs
-            p_value = 2 * (1 - scipy.stats.norm.cdf(abs(z)))
-            return z, p_value
-        wald_wolfowitz_test_statistic, wald_wolfowitz_p_value = wald_wolfowitz_test(residuals.flatten())
-        self.residual_normal_independent_test["Wald-Wolfowitz"] = wald_wolfowitz_p_value
+                z = (runs - expected_runs) / std_runs
+                p_value = 2 * (1 - scipy.stats.norm.cdf(abs(z)))
+                return z, p_value
+            wald_wolfowitz_test_statistic, wald_wolfowitz_p_value = wald_wolfowitz_test(residuals.flatten())
+            self.residual_normal_independent_test["Wald-Wolfowitz"] = wald_wolfowitz_p_value
 
-        plt.figure(figsize=(8, 3))
-        key_list = list(self.residual_normal_independent_test.keys())
-        plt.plot(key_list, [self.residual_normal_independent_test[key] for key in key_list], "-o")
-        plt.fill_between(key_list[0:3], 0.05, 1, alpha=0.4, color="green", label="normality")
-        plt.fill_between(key_list[0:3], 0, 0.05, alpha=0.4, color="red", label="non-normality")
-        plt.fill_between(key_list[3:], 0.05, 1, alpha=0.2, color="green", label="independence")
-        plt.fill_between(key_list[3:], 0, 0.05, alpha=0.2, color="red", label="non-independence")
-        plt.legend(ncol=2); plt.ylabel("p-value"); plt.xticks(rotation=45)
-        plt.title("Residual normality and independence test")
-        plt.tight_layout()
+            plt.figure(figsize=(8, 3))
+            key_list = list(self.residual_normal_independent_test.keys())
+            plt.plot(key_list, [self.residual_normal_independent_test[key] for key in key_list], "-o")
+            plt.fill_between(key_list[0:3], 0.05, 1, alpha=0.4, color="green", label="normality")
+            plt.fill_between(key_list[0:3], 0, 0.05, alpha=0.4, color="red", label="non-normality")
+            plt.fill_between(key_list[3:], 0.05, 1, alpha=0.2, color="green", label="independence")
+            plt.fill_between(key_list[3:], 0, 0.05, alpha=0.2, color="red", label="non-independence")
+            plt.legend(ncol=2); plt.ylabel("p-value"); plt.xticks(rotation=45)
+            plt.title("Residual normality and independence test")
+            plt.tight_layout()
 
         return self.residual_normal_independent_test
 
@@ -829,7 +900,6 @@ class linear_regression_vanilla:
         Analysis include:
             (1) Pair-wise scatter plot and R^2 of features vs target
             (2) Pair-wise correlation matrix of features vs target
-        
         '''
         ncol = 4
         nrow = (self.p + 1) // ncol + 1
@@ -854,7 +924,7 @@ class linear_regression_vanilla:
         plt.suptitle("Feature vs Target")
         plt.tight_layout()
 
-    def feature_selection_all(self):
+    def feature_selection_all(self, is_plot=True):
         '''
         Feature selection using different methods:
             (1) Best subset selection (self.feature_selection_best_subset)
@@ -868,89 +938,90 @@ class linear_regression_vanilla:
         '''          
         
         self.selected_feature = collections.defaultdict(list)
-        self.feature_selection_best_subset(criterion="R2 (out-of-sample)")
-        self.feature_selection_forward_stepwise(criterion="R2 (out-of-sample)")
-        self.feature_selection_ridge_lasso()
-        self.feature_selection_least_angle_regression()
+        self.feature_selection_best_subset(criterion="R2 (out-of-sample)", is_plot=is_plot)
+        self.feature_selection_forward_stepwise(criterion="R2 (out-of-sample)", is_plot=is_plot)
+        self.feature_selection_ridge_lasso(is_plot=is_plot)
+        self.feature_selection_least_angle_regression(is_plot=is_plot)
 
-        plt.figure(figsize=(6, 4))
-        plt.plot(np.arange(1, self.p+1, 1), [self.feature_selection_best_subset_summary[i][4] for i in range(1, self.p+1)], "-o", label="best subset")
-        plt.plot(np.arange(1, self.p+1, 1), [self.feature_selection_forward_stepwise_summary[i][4] for i in range(1, self.p+1)], "-o", label="forward stepwise")
-        #plt.plot(np.arange(1, self.p+1, 1), [self.feature_selection_ridge_summary[i][1] for i in range(1, self.p+1)], "-o", label="ridge")
-        plt.plot(np.arange(1, self.p+1, 1), [self.feature_selection_lasso_summary[i][1] for i in range(1, self.p+1)], "-o", label="lasso")
-        plt.plot(np.arange(1, self.p+1, 1), [self.feature_selection_least_angle_regression_summary[i][1] for i in range(1, self.p+1)], "-o", label="least angle regression")
-        plt.xlabel("number of features")
-        plt.ylabel("R^2 (out-of-sample)")
-        plt.title("Feature selection")
-        plt.legend()
+        if is_plot:
+            plt.figure(figsize=(6, 4))
+            plt.plot(np.arange(1, self.p+1, 1), [self.feature_selection_best_subset_summary[i][4] for i in range(1, self.p+1)], "-o", label="best subset")
+            plt.plot(np.arange(1, self.p+1, 1), [self.feature_selection_forward_stepwise_summary[i][4] for i in range(1, self.p+1)], "-o", label="forward stepwise")
+            #plt.plot(np.arange(1, self.p+1, 1), [self.feature_selection_ridge_summary[i][1] for i in range(1, self.p+1)], "-o", label="ridge")
+            plt.plot([i for i in np.arange(1, self.p+1, 1) if i in self.feature_selection_lasso_summary.keys()], [self.feature_selection_lasso_summary[i][1] for i in np.arange(1, self.p+1, 1) if i in self.feature_selection_lasso_summary.keys()], "-o", label="lasso")
+            plt.plot([i for i in np.arange(1, self.p+1, 1) if i in self.feature_selection_least_angle_regression_summary.keys()], [self.feature_selection_least_angle_regression_summary[i][1] for i in np.arange(1, self.p+1, 1) if i in self.feature_selection_least_angle_regression_summary.keys()], "-o", label="least angle regression")
+            plt.xlabel("number of features")
+            plt.ylabel("R^2 (out-of-sample)")
+            plt.title("Feature selection")
+            plt.legend()
 
-        plt.figure(figsize=(8, 8))
-        plt.subplot(2, 2, 1)
-        ar = np.zeros((self.p, self.p)); ar[:] = np.nan
-        for feature_num in range(1, self.p+1, 1):
-            selected_feature_idx = self.feature_selection_best_subset_summary[feature_num][0]
-            ar[feature_num-1, selected_feature_idx] = 1
-        plt.imshow(ar, cmap='Blues', vmin=0, vmax=1, alpha=0.5, aspect='auto')
-        for i in range(self.p):
-            plt.axvline(x=i-0.5, color='gray', linestyle='--', linewidth=0.5)
-            plt.axhline(y=i-0.5, color='gray', linestyle='--', linewidth=0.5)
-        plt.xticks(range(self.p), self.X_columns, rotation=45)
-        plt.yticks(range(self.p), range(1, self.p+1))
-        plt.xlabel("selected feature")
-        plt.ylabel("feature number")
-        plt.title("Best subset selection")
-
-        plt.subplot(2, 2, 2)        
-        ar = np.zeros((self.p, self.p)); ar[:] = np.nan
-        for feature_num in range(1, self.p+1, 1):
-            selected_feature_idx = self.feature_selection_forward_stepwise_summary[feature_num][0]
-            ar[feature_num-1, selected_feature_idx] = 1
-        plt.imshow(ar, cmap='Blues', vmin=0, vmax=1, alpha=0.5, aspect='auto')
-        for i in range(self.p):
-            plt.axvline(x=i-0.5, color='gray', linestyle='--', linewidth=0.5)
-            plt.axhline(y=i-0.5, color='gray', linestyle='--', linewidth=0.5)
-        plt.xticks(range(self.p), self.X_columns, rotation=45)
-        plt.yticks(range(self.p), range(1, self.p+1))
-        plt.xlabel("selected feature")
-        plt.ylabel("feature number")
-        plt.title("Forward stepwise selection")
-
-        plt.subplot(2, 2, 3)
-        ar = np.zeros((self.p, self.p)); ar[:] = np.nan
-        for feature_num in range(1, self.p+1, 1):
-            if feature_num in self.feature_selection_lasso_summary.keys():
-                selected_feature_idx = self.feature_selection_lasso_summary[feature_num][0]
+            plt.figure(figsize=(8, 8))
+            plt.subplot(2, 2, 1)
+            ar = np.zeros((self.p, self.p)); ar[:] = np.nan
+            for feature_num in range(1, self.p+1, 1):
+                selected_feature_idx = self.feature_selection_best_subset_summary[feature_num][0]
                 ar[feature_num-1, selected_feature_idx] = 1
-        plt.imshow(ar, cmap='Blues', vmin=0, vmax=1, alpha=0.5, aspect='auto')
-        for i in range(self.p):
-            plt.axvline(x=i-0.5, color='gray', linestyle='--', linewidth=0.5)
-            plt.axhline(y=i-0.5, color='gray', linestyle='--', linewidth=0.5)
-        plt.xticks(range(self.p), self.X_columns, rotation=45)
-        plt.yticks(range(self.p), range(1, self.p+1))
-        plt.xlabel("selected feature")
-        plt.ylabel("feature number")
-        plt.title("Lasso selection")
+            plt.imshow(ar, cmap='Blues', vmin=0, vmax=1, alpha=0.5, aspect='auto')
+            for i in range(self.p):
+                plt.axvline(x=i-0.5, color='gray', linestyle='--', linewidth=0.5)
+                plt.axhline(y=i-0.5, color='gray', linestyle='--', linewidth=0.5)
+            plt.xticks(range(self.p), self.X_columns, rotation=45)
+            plt.yticks(range(self.p), range(1, self.p+1))
+            plt.xlabel("selected feature")
+            plt.ylabel("feature number")
+            plt.title("Best subset selection")
 
-        plt.subplot(2, 2, 4)
-        ar = np.zeros((self.p, self.p)); ar[:] = np.nan
-        for feature_num in range(1, self.p+1, 1):
-            if feature_num in self.feature_selection_least_angle_regression_summary.keys():
-                selected_feature_idx = self.feature_selection_least_angle_regression_summary[feature_num][0]
+            plt.subplot(2, 2, 2)        
+            ar = np.zeros((self.p, self.p)); ar[:] = np.nan
+            for feature_num in range(1, self.p+1, 1):
+                selected_feature_idx = self.feature_selection_forward_stepwise_summary[feature_num][0]
                 ar[feature_num-1, selected_feature_idx] = 1
-        plt.imshow(ar, cmap='Blues', vmin=0, vmax=1, alpha=0.5, aspect='auto')
-        for i in range(self.p):
-            plt.axvline(x=i-0.5, color='gray', linestyle='--', linewidth=0.5)
-            plt.axhline(y=i-0.5, color='gray', linestyle='--', linewidth=0.5)
-        plt.xticks(range(self.p), self.X_columns, rotation=45)
-        plt.yticks(range(self.p), range(1, self.p+1))
-        plt.xlabel("selected feature")
-        plt.ylabel("feature number")
-        plt.title("Least angle regression")
+            plt.imshow(ar, cmap='Blues', vmin=0, vmax=1, alpha=0.5, aspect='auto')
+            for i in range(self.p):
+                plt.axvline(x=i-0.5, color='gray', linestyle='--', linewidth=0.5)
+                plt.axhline(y=i-0.5, color='gray', linestyle='--', linewidth=0.5)
+            plt.xticks(range(self.p), self.X_columns, rotation=45)
+            plt.yticks(range(self.p), range(1, self.p+1))
+            plt.xlabel("selected feature")
+            plt.ylabel("feature number")
+            plt.title("Forward stepwise selection")
 
-        plt.suptitle("feature selection")
-        plt.tight_layout()
+            plt.subplot(2, 2, 3)
+            ar = np.zeros((self.p, self.p)); ar[:] = np.nan
+            for feature_num in range(1, self.p+1, 1):
+                if feature_num in self.feature_selection_lasso_summary.keys():
+                    selected_feature_idx = self.feature_selection_lasso_summary[feature_num][0]
+                    ar[feature_num-1, selected_feature_idx] = 1
+            plt.imshow(ar, cmap='Blues', vmin=0, vmax=1, alpha=0.5, aspect='auto')
+            for i in range(self.p):
+                plt.axvline(x=i-0.5, color='gray', linestyle='--', linewidth=0.5)
+                plt.axhline(y=i-0.5, color='gray', linestyle='--', linewidth=0.5)
+            plt.xticks(range(self.p), self.X_columns, rotation=45)
+            plt.yticks(range(self.p), range(1, self.p+1))
+            plt.xlabel("selected feature")
+            plt.ylabel("feature number")
+            plt.title("Lasso selection")
 
-    def feature_selection_best_subset(self, criterion="R2 (out-of-sample)"):
+            plt.subplot(2, 2, 4)
+            ar = np.zeros((self.p, self.p)); ar[:] = np.nan
+            for feature_num in range(1, self.p+1, 1):
+                if feature_num in self.feature_selection_least_angle_regression_summary.keys():
+                    selected_feature_idx = self.feature_selection_least_angle_regression_summary[feature_num][0]
+                    ar[feature_num-1, selected_feature_idx] = 1
+            plt.imshow(ar, cmap='Blues', vmin=0, vmax=1, alpha=0.5, aspect='auto')
+            for i in range(self.p):
+                plt.axvline(x=i-0.5, color='gray', linestyle='--', linewidth=0.5)
+                plt.axhline(y=i-0.5, color='gray', linestyle='--', linewidth=0.5)
+            plt.xticks(range(self.p), self.X_columns, rotation=45)
+            plt.yticks(range(self.p), range(1, self.p+1))
+            plt.xlabel("selected feature")
+            plt.ylabel("feature number")
+            plt.title("Least angle regression")
+
+            plt.suptitle("feature selection")
+            plt.tight_layout()
+
+    def feature_selection_best_subset(self, criterion="R2 (out-of-sample)", is_plot=True):
         '''
         Feature selection by best subset selection.
         params:
@@ -1024,9 +1095,12 @@ class linear_regression_vanilla:
         plt.suptitle("Feature selection by best subset selection with criterion: %s" % criterion)
         plt.tight_layout()
 
+        if not is_plot:
+            plt.close(plt.gcf())
+
         return self.feature_selection_best_subset_summary
 
-    def feature_selection_forward_stepwise(self, criterion="R2 (out-of-sample)"):
+    def feature_selection_forward_stepwise(self, criterion="R2 (out-of-sample)", is_plot=True):
         '''
         Feature selection by forward stepwise selection.
         params:
@@ -1063,25 +1137,26 @@ class linear_regression_vanilla:
             print("feature_num: %d, best feature: %s, R^2 (in-sample): %.4f, AIC (in-sample): %.4f, BIC (in-sample): %.4f, R^2 (out-of-sample): %.4f" % (feature_num, log[feature_num][0][0], log[feature_num][0][1], log[feature_num][0][2], log[feature_num][0][3], log[feature_num][0][4]))
             self.feature_selection_forward_stepwise_summary[feature_num] = log[feature_num][0]
 
-        plt.figure(figsize=(8, 6))
-        plt.subplot(4,1,1)
-        plt.plot(np.arange(1, self.p+1, 1), [self.feature_selection_forward_stepwise_summary[i][1] for i in np.arange(1, self.p+1, 1)], "o-")
-        plt.xlabel("feature number"); plt.ylabel("R^2 (in-sample)")
-        plt.subplot(4,1,2)
-        plt.plot(np.arange(1, self.p+1, 1), [self.feature_selection_forward_stepwise_summary[i][2] for i in np.arange(1, self.p+1, 1)], "o-")
-        plt.xlabel("feature number"); plt.ylabel("AIC (in-sample)")
-        plt.subplot(4,1,3)
-        plt.plot(np.arange(1, self.p+1, 1), [self.feature_selection_forward_stepwise_summary[i][3] for i in np.arange(1, self.p+1, 1)], "o-")
-        plt.xlabel("feature number"); plt.ylabel("BIC (in-sample)")
-        plt.subplot(4,1,4)
-        plt.plot(np.arange(1, self.p+1, 1), [self.feature_selection_forward_stepwise_summary[i][4] for i in np.arange(1, self.p+1, 1)], "o-")
-        plt.xlabel("feature number"); plt.ylabel("R^2 (out-of-sample)")
-        plt.suptitle("Feature selection by forward stepwise selection with criterion: %s" % criterion)
-        plt.tight_layout()
+        if is_plot:
+            plt.figure(figsize=(8, 6))
+            plt.subplot(4,1,1)
+            plt.plot(np.arange(1, self.p+1, 1), [self.feature_selection_forward_stepwise_summary[i][1] for i in np.arange(1, self.p+1, 1)], "o-")
+            plt.xlabel("feature number"); plt.ylabel("R^2 (in-sample)")
+            plt.subplot(4,1,2)
+            plt.plot(np.arange(1, self.p+1, 1), [self.feature_selection_forward_stepwise_summary[i][2] for i in np.arange(1, self.p+1, 1)], "o-")
+            plt.xlabel("feature number"); plt.ylabel("AIC (in-sample)")
+            plt.subplot(4,1,3)
+            plt.plot(np.arange(1, self.p+1, 1), [self.feature_selection_forward_stepwise_summary[i][3] for i in np.arange(1, self.p+1, 1)], "o-")
+            plt.xlabel("feature number"); plt.ylabel("BIC (in-sample)")
+            plt.subplot(4,1,4)
+            plt.plot(np.arange(1, self.p+1, 1), [self.feature_selection_forward_stepwise_summary[i][4] for i in np.arange(1, self.p+1, 1)], "o-")
+            plt.xlabel("feature number"); plt.ylabel("R^2 (out-of-sample)")
+            plt.suptitle("Feature selection by forward stepwise selection with criterion: %s" % criterion)
+            plt.tight_layout()
 
         return self.feature_selection_forward_stepwise_summary
 
-    def feature_selection_ridge_lasso(self, beta_threshold = 1e-3):
+    def feature_selection_ridge_lasso(self, beta_threshold = 1e-3, is_plot=True):
         '''
         Feature selection by ridge regression and lasso regression.
         Feature selection is based on the absolute value of the coefficients.
@@ -1121,18 +1196,19 @@ class linear_regression_vanilla:
                 print("Ridge feature number: %d, alpha: %.4f, selected feature index: %s, R^2 (out-of-sample): %.4f" % (coef_2_nonzero_ct, alpha, self.feature_selection_ridge_summary[coef_2_nonzero_ct][0], log[alpha][2]))
                 critical_alpha.append(alpha)
 
-        plt.figure(figsize=(8, 6))
-        plt.subplot(2,1,1)
-        plt.plot(alpha_list, [log[i][2] for i in alpha_list])
-        plt.xscale("log"); plt.xlabel("alpha"); plt.ylabel(r"$R^2$ (out-of-sample)")
-        plt.subplot(2,1,2)
-        for feature_idx in range(self.p):
-            plt.plot(alpha_list, [log[i][0][feature_idx, 0] for i in alpha_list],  label=self.X_columns[feature_idx])
-        plt.axhline(y=0, color='black', linestyle='--')
-        plt.vlines(critical_alpha, ymin=plt.gca().get_ylim()[0], ymax=plt.gca().get_ylim()[1], color="red", linestyle="--", label="critical alpha")
-        plt.xscale("log"); plt.xlabel("alpha"); plt.ylabel(r"$\beta$"); plt.legend()
-        plt.suptitle("Feature selection by ridge regression")
-        plt.tight_layout()
+        if is_plot:
+            plt.figure(figsize=(8, 6))
+            plt.subplot(2,1,1)
+            plt.plot(alpha_list, [log[i][2] for i in alpha_list])
+            plt.xscale("log"); plt.xlabel("alpha"); plt.ylabel(r"$R^2$ (out-of-sample)")
+            plt.subplot(2,1,2)
+            for feature_idx in range(self.p):
+                plt.plot(alpha_list, [log[i][0][feature_idx, 0] for i in alpha_list],  label=self.X_columns[feature_idx])
+            plt.axhline(y=0, color='black', linestyle='--')
+            plt.vlines(critical_alpha, ymin=plt.gca().get_ylim()[0], ymax=plt.gca().get_ylim()[1], color="red", linestyle="--", label="critical alpha")
+            plt.xscale("log"); plt.xlabel("alpha"); plt.ylabel(r"$\beta$"); plt.legend()
+            plt.suptitle("Feature selection by ridge regression")
+            plt.tight_layout()
 
         # Lasso regression
         print('--- Feature selection by lasso regression ---')
@@ -1163,20 +1239,21 @@ class linear_regression_vanilla:
                 print("Lasso feature number: %d, alpha: %.4f, selected feature index: %s, R^2 (out-of-sample): %.4f" % (coef_2_nonzero_ct, alpha, self.feature_selection_lasso_summary[coef_2_nonzero_ct][0], log[alpha][2]))
                 critical_alpha.append(alpha)
 
-        plt.figure(figsize=(8, 6))
-        plt.subplot(2,1,1)
-        plt.plot(alpha_list, [log[i][2] for i in alpha_list])
-        plt.xscale("log"); plt.xlabel("alpha"); plt.ylabel(r"$R^2$ (out-of-sample)")
-        plt.subplot(2,1,2)
-        for feature_idx in range(self.p):
-            plt.plot(alpha_list, [log[i][0][feature_idx, 0] for i in alpha_list],  label=self.X_columns[feature_idx])
-        plt.axhline(y=0, color='black', linestyle='--')
-        plt.vlines(critical_alpha, ymin=plt.gca().get_ylim()[0], ymax=plt.gca().get_ylim()[1], color="red", linestyle="--", label="critical alpha")
-        plt.xscale("log"); plt.xlabel("alpha"); plt.ylabel(r"$\beta$"); plt.legend()
-        plt.suptitle("Feature selection by lasso regression")
-        plt.tight_layout()
+        if is_plot:
+            plt.figure(figsize=(8, 6))
+            plt.subplot(2,1,1)
+            plt.plot(alpha_list, [log[i][2] for i in alpha_list])
+            plt.xscale("log"); plt.xlabel("alpha"); plt.ylabel(r"$R^2$ (out-of-sample)")
+            plt.subplot(2,1,2)
+            for feature_idx in range(self.p):
+                plt.plot(alpha_list, [log[i][0][feature_idx, 0] for i in alpha_list],  label=self.X_columns[feature_idx])
+            plt.axhline(y=0, color='black', linestyle='--')
+            plt.vlines(critical_alpha, ymin=plt.gca().get_ylim()[0], ymax=plt.gca().get_ylim()[1], color="red", linestyle="--", label="critical alpha")
+            plt.xscale("log"); plt.xlabel("alpha"); plt.ylabel(r"$\beta$"); plt.legend()
+            plt.suptitle("Feature selection by lasso regression")
+            plt.tight_layout()
 
-    def feature_selection_least_angle_regression(self, beta_threshold = 1e-3):
+    def feature_selection_least_angle_regression(self, beta_threshold = 1e-3, is_plot=True):
         '''
         Feature selection by least angle regression.
         Feature selection is based on the absolute value of the coefficients.
@@ -1211,19 +1288,20 @@ class linear_regression_vanilla:
                 print("Least Angle Regression: feature number: %d, alpha: %.4f, selected feature index: %s, R^2 (out-of-sample): %.4f" % (feature_num, alpha, self.feature_selection_least_angle_regression_summary[feature_num][0], R2_oos[i]))
                 critical_alpha.append(alpha)
 
-        plt.figure(figsize=(8, 6))
-        plt.subplot(2,1,1)
-        for i in range(coef_path.shape[1]):
-            plt.plot(alpha_path, coef_path[:, i], "-o", label=self.X_columns[i])
-        plt.axhline(y=0, color='black', linestyle='--')
-        plt.xlabel("alpha"); plt.ylabel(r"$\beta$"); plt.legend()
+        if is_plot:
+            plt.figure(figsize=(8, 6))
+            plt.subplot(2,1,1)
+            for i in range(coef_path.shape[1]):
+                plt.plot(alpha_path, coef_path[:, i], "-o", label=self.X_columns[i])
+            plt.axhline(y=0, color='black', linestyle='--')
+            plt.xlabel("alpha"); plt.ylabel(r"$\beta$"); plt.legend()
 
-        plt.subplot(2,1,2)
-        plt.plot(alpha_path, R2_oos, "-o")
-        plt.axhline(y=0, color='black', linestyle='--')
-        plt.xlabel("alpha"); plt.ylabel(r"$R^2$ (out-of-sample)")
-        plt.suptitle("least angle regression")
-        plt.tight_layout()
+            plt.subplot(2,1,2)
+            plt.plot(alpha_path, R2_oos, "-o")
+            plt.axhline(y=0, color='black', linestyle='--')
+            plt.xlabel("alpha"); plt.ylabel(r"$R^2$ (out-of-sample)")
+            plt.suptitle("least angle regression")
+            plt.tight_layout()
 
     def _smoother(self, x, y, type="polynomial"):
         '''
@@ -1282,20 +1360,21 @@ column_name = data.columns[:-1].tolist()
 X_test = data.iloc[:, 0:(data.shape[1]-1)].to_numpy()
 Y_test = data.iloc[:, -1].to_numpy().reshape(-1, 1)
 
-model = linear_regression_vanilla(X, Y, X_test=X_test, Y_test=Y_test, X_columns=column_name, is_normalize=True, test_size_ratio=0.2)
+model = linear_regression(X, Y, X_test=X_test, Y_test=Y_test, X_columns=column_name, is_normalize=True, test_size_ratio=0.2)
 #model.visualize_data()
 model.fit(is_output=False)
-outlier_idx = model.outlier(threshold="strict", is_output=False)["outlier_idx"]
+outlier_idx = model.outlier(threshold="strict", is_output=True)["outlier_idx"]
 X_new = X[~np.isin(np.arange(X.shape[0]), outlier_idx), :]
 Y_new = Y[~np.isin(np.arange(Y.shape[0]), outlier_idx), :]
 
-model = linear_regression_vanilla(X_new, Y_new, X_test=X_test, Y_test=Y_test, X_columns=column_name, is_normalize=True, test_size_ratio=0.2)
+model = linear_regression(X_new, Y_new, X_test=X_test, Y_test=Y_test, X_columns=column_name, is_normalize=True, test_size_ratio=0.2)
 model.fit(is_output=False)
+model.visualize_data()
 #model.colinearity()
 #model.homoscedasticity()
 #model.test_residual_normality_independence()
 #model.feature_target_correlation()
-model.feature_selection_all()
+#model.feature_selection_all()
 
 # %%
 class ridge_lasso_regression:
@@ -1325,20 +1404,38 @@ class ridge_lasso_regression:
                 self.X_test = (X_test.copy() - self.X_mean) / self.X_std
                 self.Y_test = (Y_test.copy().reshape(-1, 1) - self.Y_mean) / self.Y_std
         else:
-            self.X_train = self.X.copy()[0:int(self.n*(1-self.test_size_ratio)), :]
-            self.Y_train = self.Y.copy()[0:int(self.n*(1-self.test_size_ratio)), :]
-            self.X_test = self.X.copy()[int(self.n*(1-self.test_size_ratio)):, :]
-            self.Y_test = self.Y.copy()[int(self.n*(1-self.test_size_ratio)):, :]
+            self.X_train = X.copy()[0:int(self.n*(1-self.test_size_ratio)), :]
+            self.Y_train = Y.copy()[0:int(self.n*(1-self.test_size_ratio)), :]
+            self.X_test = X.copy()[int(self.n*(1-self.test_size_ratio)):, :]
+            self.Y_test = Y.copy()[int(self.n*(1-self.test_size_ratio)):, :]
+            if self.is_normalize:
+                self.X_train_mean = np.mean(self.X_train, axis=0)
+                self.X_train_std = np.std(self.X_train, axis=0, ddof=1)
+                self.Y_train_mean = np.mean(self.Y_train, axis=0)
+                self.Y_train_std = np.std(self.Y_train, ddof=1, axis=0)
+                self.X_train = (self.X_train - self.X_train_mean) / self.X_train_std
+                self.Y_train = (self.Y_train - self.Y_train_mean) / self.Y_train_std
+                self.X_test = (self.X_test - self.X_train_mean) / self.X_train_std
+                self.Y_test = (self.Y_test - self.Y_train_mean) / self.Y_train_std
 
-    def fit(self, alpha=None):
+    def fit(self, alpha=None, is_output=True):
         if not alpha:
             alpha = self.optimal_alpha(is_plot=False)
+            self.alpha = alpha
         if self.regularization == "ridge":
             self.model = sklearn.linear_model.Ridge(alpha=alpha, fit_intercept=True)
             self.model.fit(self.X_train, self.Y_train)
         if self.regularization == "lasso":
             self.model = sklearn.linear_model.Lasso(alpha=alpha, fit_intercept=True)
             self.model.fit(self.X_train, self.Y_train)
+
+        if is_output:
+            plt.figure(figsize=(6, 4))
+            plt.plot(self.X_columns, self.model.coef_.flatten(), "o-", label="coef")
+            plt.axhline(y=0, color='black', linestyle='--')
+            plt.legend(title=r"$\alpha=$"+"%.3f" % alpha)
+            plt.title("{} regression".format(self.regularization))
+            plt.xlabel("feature"); plt.ylabel(r"$\beta$")
 
     def predict(self, X):
         if self.is_normalize:
@@ -1349,7 +1446,7 @@ class ridge_lasso_regression:
         return Y_pred
 
     def optimal_alpha(self, is_plot=True):
-        alpha_list = np.logspace(-6, 6, num=10000, base=10)
+        alpha_list = np.logspace(-6, 6, num=1000, base=10)
         R2_oss_hist = []; beta_hist = []
         for alpha in alpha_list:
             if self.regularization == "ridge":
@@ -1386,7 +1483,8 @@ class ridge_lasso_regression:
         return alpha_list[np.argmax(R2_oss_hist)]
 
 model = ridge_lasso_regression(X_new, Y_new, X_test, Y_test, X_columns=column_name, regularization="lasso")
-model.optimal_alpha()
+#model.optimal_alpha()
+#model.fit()
 
 #%%
 class principal_component_regression:
@@ -1418,10 +1516,19 @@ class principal_component_regression:
                 self.X_test = (X_test.copy() - self.X_mean) / self.X_std
                 self.Y_test = (Y_test.copy().reshape(-1, 1) - self.Y_mean) / self.Y_std
         else:
-            self.X_train = self.X.copy()[0:int(self.n*(1-self.test_size_ratio)), :]
-            self.Y_train = self.Y.copy()[0:int(self.n*(1-self.test_size_ratio)), :]
-            self.X_test = self.X.copy()[int(self.n*(1-self.test_size_ratio)):, :]
-            self.Y_test = self.Y.copy()[int(self.n*(1-self.test_size_ratio)):, :]
+            self.X_train = X.copy()[0:int(self.n*(1-self.test_size_ratio)), :]
+            self.Y_train = Y.copy()[0:int(self.n*(1-self.test_size_ratio)), :]
+            self.X_test = X.copy()[int(self.n*(1-self.test_size_ratio)):, :]
+            self.Y_test = Y.copy()[int(self.n*(1-self.test_size_ratio)):, :]
+            if self.is_normalize:
+                self.X_train_mean = np.mean(self.X_train, axis=0)
+                self.X_train_std = np.std(self.X_train, axis=0, ddof=1)
+                self.Y_train_mean = np.mean(self.Y_train, axis=0)
+                self.Y_train_std = np.std(self.Y_train, ddof=1, axis=0)
+                self.X_train = (self.X_train - self.X_train_mean) / self.X_train_std
+                self.Y_train = (self.Y_train - self.Y_train_mean) / self.Y_train_std
+                self.X_test = (self.X_test - self.X_train_mean) / self.X_train_std
+                self.Y_test = (self.Y_test - self.Y_train_mean) / self.Y_train_std
 
     def fit(self, factor_num=None, is_plot=True):
         if not factor_num:
@@ -1434,12 +1541,26 @@ class principal_component_regression:
         self.V = VT.T[:, 0:factor_num]
 
         if is_plot:
-            n_cols = 2; n_rows = int(np.ceil(factor_num / n_cols))
+            plt.figure(figsize=(6, 4))
+            plt.subplot(2, 1, 1)
+            plt.plot(["pc {}".format(i) for i in range(factor_num)], self.ols.params[1:], "o-")
+            plt.axhline(y=0, color='black', linestyle='--')
+            plt.ylabel(r"$\beta$"); plt.xticks(rotation=0)
+            plt.subplot(2, 1, 2)
+            plt.plot(self.X_columns, self.beta, "o-", label="coef")
+            plt.axhline(y=0, color='black', linestyle='--')
+            plt.ylabel(r"$\beta$"); plt.xticks(rotation=0)
+            plt.suptitle("Principal component regression")
+            plt.tight_layout()
+
+            n_cols = 2; n_rows = int(np.ceil(factor_num / n_cols))                
             plt.figure(figsize=(4*n_cols, 2*n_rows))
             for i in range(factor_num):
                 plt.subplot(n_rows, n_cols, i+1)
-                plt.plot(self.V[:, i], "o-", label=r"pc {}".format(i))
+                plt.plot(self.X_columns, self.V[:, i], "o-", label=r"pc {}".format(i))
                 plt.axhline(y=0, color='black', linestyle='--')
+                plt.xticks(rotation=45)
+                plt.ylabel(r"$v_{}$".format(i))
                 plt.legend()
                 plt.suptitle(r"$\{v_i\}_{i=1}^K$: principal components")
                 plt.tight_layout()
@@ -1520,8 +1641,8 @@ class principal_component_regression:
         return optimal_factor_num
 
 model = principal_component_regression(X_new, Y_new, X_test=X_test, Y_test=Y_test, X_columns=column_name, is_normalize=True, test_size_ratio=0.2)
-model.optimal_factor_number()
-#model.fit(factor_num=5, is_plot=True)
+#model.optimal_factor_number()
+model.fit(factor_num=5, is_plot=True)
 
 #%%
 class partial_least_square_regression:
@@ -1552,16 +1673,35 @@ class partial_least_square_regression:
                 self.X_test = (X_test.copy() - self.X_mean) / self.X_std
                 self.Y_test = (Y_test.copy().reshape(-1, 1) - self.Y_mean) / self.Y_std
         else:
-            self.X_train = self.X.copy()[0:int(self.n*(1-self.test_size_ratio)), :]
-            self.Y_train = self.Y.copy()[0:int(self.n*(1-self.test_size_ratio)), :]
-            self.X_test = self.X.copy()[int(self.n*(1-self.test_size_ratio)):, :]
-            self.Y_test = self.Y.copy()[int(self.n*(1-self.test_size_ratio)):, :]
+            self.X_train = X.copy()[0:int(self.n*(1-self.test_size_ratio)), :]
+            self.Y_train = Y.copy()[0:int(self.n*(1-self.test_size_ratio)), :]
+            self.X_test = X.copy()[int(self.n*(1-self.test_size_ratio)):, :]
+            self.Y_test = Y.copy()[int(self.n*(1-self.test_size_ratio)):, :]
+            if self.is_normalize:
+                self.X_train_mean = np.mean(self.X_train, axis=0)
+                self.X_train_std = np.std(self.X_train, axis=0, ddof=1)
+                self.Y_train_mean = np.mean(self.Y_train, axis=0)
+                self.Y_train_std = np.std(self.Y_train, ddof=1, axis=0)
+                self.X_train = (self.X_train - self.X_train_mean) / self.X_train_std
+                self.Y_train = (self.Y_train - self.Y_train_mean) / self.Y_train_std
+                self.X_test = (self.X_test - self.X_train_mean) / self.X_train_std
+                self.Y_test = (self.Y_test - self.Y_train_mean) / self.Y_train_std
 
-    def fit(self, factor_num=None):
+    def fit(self, factor_num=None, is_output=True):
         if not factor_num:
             factor_num = self.optimal_factor_number(criterion="R^2 (out-of-sample)", is_plot=False)
+            self.factor_number = factor_num
         self.pls = sklearn.cross_decomposition.PLSRegression(n_components=factor_num, scale=True)
         self.pls.fit(self.X, self.Y)
+
+        if is_output:
+            plt.figure(figsize=(6, 4))
+            plt.plot(self.X_columns, self.pls.coef_.flatten(), "o-", label="coef")
+            plt.axhline(y=0, color='black', linestyle='--')
+            plt.legend(title="factor number: %d" % factor_num)
+            plt.title("Partial least square regression")
+            plt.xlabel("feature"); plt.ylabel(r"$\beta$")
+            plt.xticks(rotation=0)
 
     def predict(self, X):
         if self.is_normalize:
@@ -1605,7 +1745,8 @@ class partial_least_square_regression:
 
 #to be continued from here
 model = partial_least_square_regression(X_new, Y_new, X_test=X_test, Y_test=Y_test, X_columns=column_name, is_normalize=True, test_size_ratio=0.2)
-model.optimal_factor_number()
+#model.optimal_factor_number()
+model.fit(factor_num=5, is_output=True)
 
 #%%
 
