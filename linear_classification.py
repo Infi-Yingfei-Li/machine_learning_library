@@ -1,5 +1,6 @@
 #%%
-import os, sys, copy, scipy, datetime, tqdm, collections, itertools, warnings
+import os, sys, copy, scipy, datetime, tqdm, collections, itertools, warnings, contextlib
+from turtle import color
 import numpy as np
 import pandas as pd
 
@@ -24,7 +25,16 @@ import sklearn.discriminant_analysis
 import sklearn.utils.multiclass
 
 import umap, pingouin
-from zmq import has
+
+@contextlib.contextmanager
+def suppress_print():
+    original_stdout = sys.stdout
+    sys.stdout = open(os.devnull, 'w')
+    try:
+        yield
+    finally:
+        sys.stdout.close()
+        sys.stdout = original_stdout
 
 #%%
 class linear_discriminant_analysis:
@@ -927,13 +937,13 @@ X_test = X_test[idx, :]; Y_test = Y_test[idx, :]
 #model.optimal_shrinkage_covariance(is_output=True)
 
 #%%
-class logistic_regression:
+class logistic_regression_binary:
     def __init__(self, X, Y, X_test=None, Y_test=None, X_columns=None, is_normalize=True, test_size_ratio=0.2):
         '''
-        Initialize the logistic regression model.
+        Initialize the logistic regression model for binary classification.
         params:
             X: feature matrix, shape (n, p)
-            Y: target vector, shape (n, 1). Y is a vector encoding class information, with the first class as 0, the second class as 1, and so on.
+            Y: target vector, shape (n, 1). Y is a vector encoding class information, with the first class as 0, the second class as 1.
             X_test: test feature matrix, shape (n_test, p)
             Y_test: test target vector, shape (n_test, 1)
                 If X_test and Y_test are not provided, the data will be split into train and test sets based on the test_size_ratio.
@@ -951,6 +961,8 @@ class logistic_regression:
             (6) Feature selection;
             (7) Model validation, refinement, and optimization
         '''
+        if sorted(np.unique(Y.flatten()).tolist()) != [0, 1]:
+            raise ValueError("Y must be a binary vector with values 0 and 1.")
         self.X = X; self.Y = Y.reshape(-1, 1)
         self.X_columns = X_columns if X_columns is not None else [f"feature_{i}" for i in range(X.shape[1])]
         self.is_normalize = is_normalize
@@ -987,73 +999,77 @@ class logistic_regression:
         params:
             is_output: whether to print and plot the summary of the model
         '''
-        if self.c == 2:
-            self.logit = self._fit_logit(self.X, self.Y, disp=is_output)
-            if is_output and hasattr(self.logit, "aic"):
-                print(self.logit.summary())
-                plt.figure(figsize=(6, 6))
-                plt.subplot(2, 1, 1)
-                plt.errorbar(self.X_columns, self.logit.params[1:], yerr=self.logit.bse[1:], fmt="o-")
-                plt.axhline(0, color="black", linestyle="--")
-                plt.xticks(rotation=45); plt.ylabel(r"$\beta$")
-                plt.subplot(2, 1, 2)
-                plt.bar(self.X_columns, self.logit.pvalues[1:], color=["red" if p < 0.01 else "orange" if p < 0.05 else "green" for p in self.logit.pvalues[1:]])
-                plt.axhline(0.01, color="red", linestyle="--", label="0.01")
-                plt.axhline(0.05, color="orange", linestyle="--", label="0.05")
-                plt.ylim(1e-4, 1); plt.yscale("log")
-                plt.xticks(rotation=45)
-                plt.ylabel("p-value")
-                plt.suptitle("Logistic regression coefficients")
-                plt.tight_layout()
-            if is_output and hasattr(self.logit, "coef_"):
-                plt.figure(figsize=(6, 3))
-                plt.plot(self.X_columns, self.logit.coef_, fmt="o-")                
-        else:
-            print("Warning: Multi-class logistic regression has not been implemented rigorously yet. The results may not be reliable.")
-            self.logit = statsmodels.api.MNLogit(self.Y.flatten(), sm.add_constant(self.X, prepend=True)).fit()
-            if is_output:
-                print(self.logit.summary())
-                ncol = 3; nrow = int(np.ceil(self.c / ncol))
-                plt.figure(figsize=(4*ncol, 2*nrow))
-                for c in range(self.c-1):
-                    plt.subplot(ncol, nrow, c+1)
-                    plt.errorbar(self.X_columns, self.logit.params[c, :], yerr=self.logit.bse[c, :], fmt="o-", label=f"Class {c}")
-                    plt.axhline(0, color="black", linestyle="--")
-                    plt.xticks(rotation=45); plt.ylabel(r"$\beta$")
-                    plt.legend()
-                plt.tight_layout()
+        self.logit = self._fit_logit(sm.add_constant(self.X, prepend=True), self.Y, disp=is_output)
+        if is_output and hasattr(self.logit, "summary"):
+            print(self.logit.summary())
+            plt.figure(figsize=(6, 6))
+            plt.subplot(2, 1, 1)
+            plt.errorbar(self.X_columns, self.logit.params[1:], yerr=self.logit.bse[1:], fmt="o-")
+            plt.axhline(0, color="black", linestyle="--")
+            plt.xticks(rotation=45); plt.ylabel(r"$\beta$")
+            plt.subplot(2, 1, 2)
+            plt.bar(self.X_columns, self.logit.pvalues[1:], color=["red" if p < 0.01 else "orange" if p < 0.05 else "green" for p in self.logit.pvalues[1:]])
+            plt.axhline(0.01, color="red", linestyle="--", label="0.01")
+            plt.axhline(0.05, color="orange", linestyle="--", label="0.05")
+            plt.ylim(1e-4, 1); plt.yscale("log")
+            plt.xticks(rotation=45)
+            plt.ylabel("p-value")
+            plt.suptitle("Logistic regression coefficients")
+            plt.tight_layout()
+        if is_output and hasattr(self.logit, "coef_"):
+            plt.figure(figsize=(6, 3))
+            plt.plot(self.X_columns, self.logit.coef_, fmt="o-")                
+    
+    def fit_regularized(self, penalty="l2", alpha=None, is_output=True):
+        '''
+        Fit the logistic regression model with regularization.
+        params:
+            penalty: type of regularization, "l1" for Lasso, "l2" for Ridge
+            alpha: regularization strength. If None, search for optimal alpha by cross-validation.
+            is_output: whether to print and plot the summary of the model
+        '''
+        if alpha == None:
+            alpha_list = np.logspace(-6, 6, num=10000, base=10)
+            accuracy = []
+            for alpha in alpha_list:
+                if type == "l1":
+                    logit = sklearn.linear_model.LogisticRegression(penalty=penalty, C=1/alpha, solver="liblinear", max_iter=10000, fit_intercept=True)
+                if type == "l2":
+                    logit = sklearn.linear_model.LogisticRegression(penalty=penalty, C=1/alpha, solver="saga", max_iter=10000, fit_intercept=True)
+                logit.fit(self.X_train, self.Y_train.flatten())
+                Y_pred = logit.predict(self.X_test).reshape(-1, 1)
+                Y_pred_binary = (Y_pred.flatten() >= 0.5).astype(int).reshape(-1, 1)
+                accuracy.append(1 - np.mean(np.abs(Y_pred_binary - self.Y_test)))
+            alpha = alpha_list[np.argmax(accuracy)]
 
-                p_value = np.zeros((self.c-1, self.p)); p_value[:] = np.nan
-                for c in range(self.c-1):
-                    p_value[c, :] = self.logit.pvalues[c, :]
-                plt.figure(figsize=(6, 6))
-                colors = ['red', 'yellow', 'green']
-                bounds = [0, 0.01, 0.05, 1]
-                cmap = matplotlib.colors.ListedColormap(colors)
-                norm = matplotlib.colors.BoundaryNorm(bounds, cmap.N)
-                plt.imshow(p_value, cmap=cmap, norm=norm, aspect='auto')
-                plt.xticks(range(self.p), self.X_columns, rotation=45)
-                plt.yticks(range(self.c-1), [f"Class {i}" for i in range(self.c-1)])
-                plt.colorbar(ticks=[0, 0.01, 0.05, 1], label="p-value")
+        if type == "l1":
+            self.logit = sklearn.linear_model.LogisticRegression(penalty=penalty, C=1/alpha, solver="liblinear", max_iter=10000, fit_intercept=True)
+        if type == "l2":
+            self.logit = sklearn.linear_model.LogisticRegression(penalty=penalty, C=1/alpha, solver="saga", max_iter=10000, fit_intercept=True)
+        self.logit.fit(self.X_train, self.Y_train.flatten())
+        if is_output:
+            plt.figure(figsize=(6, 3))
+            plt.plot(self.X_columns, self.logit.coef_.flatten(), fmt="o-")
+            plt.legend(title="alpha: %.4f" % (alpha))
 
     def predict(self, X):
         '''
-        Predict the probability of class for the given input features.
-        If the model is binary, return the probability of class 1.
-        If the model is multi-class, return the probability of each class.
+        Predict the probability for class 1 and predicted class for the given input features.
         params:
             X: feature matrix, shape (n, p)
+                Input data with no intercept term. The function will automatically add a constant term for the intercept.
         return:
-            Y_pred: predicted target values, shape (n, c)
+            Y_pred: predicted probabilities for class 1, shape (n, 1)
+            Y_pred_binary: predicted class labels, shape (n, 1)
+                Binary class labels (0 or 1) based on the predicted probabilities.
         '''
         if not hasattr(self, "logit"):
             raise Exception("Fit the model first.")
         if self.is_normalize:
             X = (X - self.X_mean) / self.X_std
-        Y_pred = self.logit.predict(sm.add_constant(X, prepend=True))
-        if self.c == 2:
-            Y_pred = Y_pred.reshape(-1, 1)
-        return Y_pred
+        Y_pred = self.logit.predict(sm.add_constant(X, prepend=True)).reshape(-1, 1)
+        Y_pred_binary = (Y_pred.flatten() > 0.5).astype(int).reshape(-1, 1)
+        return (Y_pred, Y_pred_binary)
 
     def visualize_data(self, methods=["pandas_describe", "raw_data_plot", "boxplot", "PCA", "MDS", "tSNE", "UMAP"]):
         '''
@@ -1158,11 +1174,9 @@ class logistic_regression:
             plt.suptitle("Visualization of data by low-dimensional projection")
             plt.tight_layout()
 
-    def nonlinearity(self, class_=1, smoother_type="polynomial", method=["binned_residual", "residual", "partial_residual", "interaction_term"]):
+    def nonlinearity(self, smoother_type="polynomial", method=["binned_residual", "residual", "partial_residual", "interaction_term"]):
         '''
-        Diagonostic analysis on non-linearity. 
-        For binary classification, this function detects potential nonlinearity for logit(p_1/(1-p_1)).
-        For multi-class classification, this function detects potential nonlinearity for logit(p_i/p_0).
+        Diagonostic analysis on non-linearity for logit(p_1/(1-p_1)).
 
         Analysis include:
             (1) binned residual plot
@@ -1171,7 +1185,7 @@ class logistic_regression:
                 For binary classification, the plot should be close to a 45-degree line.
 
             (2) residual versus features plot
-                Plot the estimated logit(p_i/p_0) vs each feature. Curvature in the plot suggests nonlinearity.
+                Plot the estimated logit(p_1/(1-p_1)) vs each feature. Curvature in the plot suggests nonlinearity.
 
             (3) Partial residual plot
                 Partial residual = deviance residual + estimated coefficient * feature, where
@@ -1186,15 +1200,14 @@ class logistic_regression:
                     p-value of likelihood ratio test:
                         H_0: small model. 
                         If p is small, we reject the small model and proceed with the larger model. 
-                    AIC, BIC, R^2 (out of sample): accept large model when we observe a significant reduction
-        
+                    AIC, BIC, accuracy (out-of-sample): accept large model when we observe a significant reduction in AIC or BIC, or a significant increase in accuracy_oos.
+
         params:
-            class_: class to check for nonlinearity. Default is 1. Class 0 is the reference class.
             smoother_type: type for smoother in the plots. See self._smoother for details.
 
         returns:
             self.nonlinearity_test: dict
-                - "interaction_term_metric" -- [p-value of F-statistics, AIC, BIC, out-of-sample R^2]
+                - "interaction_term_metric" -- [p-value of F-statistics, AIC, BIC, accuracy (out-of-sample)]
         '''
         if not hasattr(self, "logit"):
             raise Exception("Fit the model first.")
@@ -1203,44 +1216,26 @@ class logistic_regression:
         # binned residual plot
         if "binned_residual" in method:
             bins = 20; batch_size = int(np.ceil(self.n / bins))
-            if self.c == 2:
-                Y_pred = self.logit.predict(sm.add_constant(self.X, prepend=True)).reshape(-1, 1)
-                Y_pred = Y_pred.reshape(-1, 1)
-                sort_idx = np.argsort(Y_pred.flatten())
-                Y_pred_sorted = Y_pred[sort_idx, :]
-                Y_sorted = self.Y[sort_idx, :]
-                Y_pred_binned = [np.mean(Y_pred_sorted[i:min(i+batch_size, self.n), :]) for i in np.arange(0, self.n, batch_size)]
-                Y_binned = [np.mean(Y_sorted[i:min(i+batch_size, self.n), :]) for i in np.arange(0, self.n, batch_size)]
-                plt.figure(figsize=(3, 3))
-                plt.scatter(Y_pred_binned, Y_binned)
-                plt.plot(plt.gca().get_xlim(), plt.gca().get_ylim(), color="red", linestyle="--")
-                plt.xlabel(r"$\hat{p}(Y_i = 1)$"); plt.ylabel(r"$Y$")
-                plt.title("Binned residual plot")
-            else:
-                Y_pred = self.logit.predict(sm.add_constant(self.X, prepend=True))[:, class_]
-                Y_pred = Y_pred.reshape(-1, 1)
-                sort_idx = np.argsort(Y_pred.flatten())
-                Y_pred_sorted = Y_pred[sort_idx, :]
-                Y_sorted = self.Y[sort_idx, :]
-                Y_pred_binned = [np.mean(Y_pred_sorted[i:min(i+batch_size, self.n), :]) for i in np.arange(0, self.n, batch_size)]
-                Y_binned = [np.mean(Y_sorted[i:min(i+batch_size, self.n), :]) for i in np.arange(0, self.n, batch_size)]
-                plt.figure(figsize=(3, 3))
-                plt.scatter(Y_pred_binned, Y_binned)
-                plt.hlines(class_, 0, 1, color="red", linestyle="--")
-                plt.vlines(1, plt.gca().get_ylim()[0], plt.gca().get_ylim()[1], color="red", linestyle="--")
-                plt.xlabel(r"$\hat{p}(Y_i = $"+str(class_)+")"); plt.ylabel(r"$Y$")
-                plt.suptitle("Binned residual plot")
-                plt.tight_layout()
+            Y_pred = self.logit.predict(sm.add_constant(self.X, prepend=True))
+            Y_pred = Y_pred.reshape(-1, 1)
+            sort_idx = np.argsort(Y_pred.flatten())
+            Y_pred_sorted = Y_pred[sort_idx, :]
+            Y_sorted = self.Y[sort_idx, :]
+            Y_pred_binned = [np.mean(Y_pred_sorted[i:min(i+batch_size, self.n), :]) for i in np.arange(0, self.n, batch_size)]
+            Y_binned = [np.mean(Y_sorted[i:min(i+batch_size, self.n), :]) for i in np.arange(0, self.n, batch_size)]
+            plt.figure(figsize=(3, 3))
+            plt.scatter(Y_pred_binned, Y_binned)
+            plt.plot(plt.gca().get_xlim(), plt.gca().get_ylim(), color="red", linestyle="--")
+            plt.xlabel(r"$\hat{p}(Y_i = 1)$"); plt.ylabel(r"$Y$")
+            plt.title("Binned residual plot")
 
         # plot the residuals vs features
         if "residual" in method:
             ncol = 4; nrow = (self.p + 1) // ncol + 1
             plt.figure(figsize=(3*ncol, 3*nrow))
             plt.subplot(nrow, ncol, 1)
-            if self.c == 2:
-                Y_pred_1 = np.clip(self.logit.predict(sm.add_constant(self.X, prepend=True)).flatten(), 1e-5, 1-1e-5)
-            else:
-                Y_pred_1 = np.clip(self.logit.predict(sm.add_constant(self.X, prepend=True))[:, class_], 1e-5, 1-1e-5)
+            Y_pred_1 = self.logit.predict(sm.add_constant(self.X, prepend=True))
+            Y_pred_1 = np.clip(Y_pred_1, 1e-5, 1-1e-5).flatten()
             Y_pred_0 = 1 - Y_pred_1
             Y_pred_logit = np.log(Y_pred_1 / Y_pred_0)
 
@@ -1251,44 +1246,33 @@ class logistic_regression:
                 plt.plot(smoother["fit_x"], smoother["fit_y"], color="red", linestyle="--", label = f"$R^2$={smoother['R2']:.2f}")
                 plt.legend()
                 plt.xlabel(self.X_columns[i])
-                if self.c == 2:
-                    plt.ylabel(r"$\log \frac{p_1}{p_0}$")
-                else:
-                    plt.ylabel(r"$\log \frac{p_c}{p_0}$")
+                plt.ylabel(r"$\log \frac{p_1}{p_0}$")
             plt.suptitle("Residuals vs features")
             plt.tight_layout()
 
         # partial residual plot
         if "partial_residual" in method:
-            if self.c == 2:
-                Y_pred = self.logit.predict(sm.add_constant(self.X, prepend=True)).flatten()
-                Y_pred = np.clip(Y_pred, 1e-5, 1-1e-5)
-                deviance = np.zeros(self.n); deviance[:] = np.nan
-                deviance_residual = np.zeros(self.n); deviance_residual[:] = np.nan
-                for i in range(self.n):
-                    deviance[i] = -2*np.log(Y_pred[i]) if self.Y[i, 0] == 1 else -2*np.log(1-Y_pred[i])
-                    deviance_residual[i] = np.sign(self.Y[i, 0] - Y_pred[i]) * np.sqrt(deviance[i])
-            else:
-                Y_pred = self.logit.predict(sm.add_constant(self.X, prepend=True))
-                deviance = np.zeros(self.n); deviance[:] = np.nan
-                for i in range(self.n):
-                    deviance[i] = -2*np.log(Y_pred[i, self.Y[i, 0]])
-                deviance_residual = np.sqrt(deviance)
+            Y_pred = self.logit.predict(sm.add_constant(self.X, prepend=True))
+            Y_pred = np.clip(Y_pred.flatten(), 1e-5, 1-1e-5)
+            deviance = np.zeros(self.n); deviance[:] = np.nan
+            deviance_residual = np.zeros(self.n); deviance_residual[:] = np.nan
+            for i in range(self.n):
+                deviance[i] = -2*np.log(Y_pred[i]) if self.Y[i, 0] == 1 else -2*np.log(1-Y_pred[i])
+                deviance_residual[i] = np.sign(self.Y[i, 0] - Y_pred[i]) * np.sqrt(deviance[i])
 
             ncol = 3; nrow = int(np.ceil(self.p / ncol))
             plt.figure(figsize=(3*ncol, 3*nrow))
             for i in range(self.p):
                 plt.subplot(nrow, ncol, i + 1)
-                if self.c == 2:
+                if hasattr(self.logit, "params"):
                     partial_residual = deviance_residual + self.logit.params[i+1] * self.X[:, i]
-                else:
-                    partial_residual = deviance_residual + self.logit.params[i+1, class_] * self.X[:, i]
-
+                if hasattr(self.logit, "coef_"):
+                    partial_residual = deviance_residual + self.logit.coef_[i+1] * self.X[:, i]
                 plt.scatter(self.X[:, i], partial_residual, s=1)
                 smoother = self._smoother(self.X[:, i], partial_residual, type=smoother_type)
                 plt.plot(smoother["fit_x"], smoother["fit_y"], color="red", linestyle="--", label = f"$R^2$={smoother['R2']:.2f}")
                 plt.xlabel(self.X_columns[i]); plt.ylabel(r"$\varepsilon^{dev} + \hat{\beta}_jx_{ij}$"); plt.legend()
-            plt.suptitle("Partial residuals vs features for class {}".format(class_))
+            plt.suptitle("Partial residuals vs features")
             plt.tight_layout()
 
         # compare with polynomial model
@@ -1298,11 +1282,11 @@ class logistic_regression:
             BIC_hist = np.zeros((self.p, self.p)); BIC_hist[:] = np.nan
             CV_error = np.zeros((self.p, self.p)); CV_error[:] = np.nan
 
-            logit = self._fit_logit(self.X, self.Y.flatten())
+            logit = self._fit_logit(sm.add_constant(self.X, prepend=True), self.Y.flatten())
             if hasattr(logit, "llf"):
                 LR_benchmark = (logit.llf, logit.df_model)
 
-            logit = self._fit_logit(self.X_train, self.Y_train.flatten())
+            logit = self._fit_logit(sm.add_constant(self.X_train, prepend=True), self.Y_train.flatten())
             Y_pred = logit.predict(sm.add_constant(self.X_test, prepend=True)).reshape((-1, 1))
             Y_pred_binary = (Y_pred.flatten() >= 0.5).astype(int).reshape((-1, 1))
             CV_error_benchmark = np.mean(np.abs(self.Y_test - Y_pred_binary))
@@ -1310,7 +1294,7 @@ class logistic_regression:
             for i in range(self.p):
                 for j in range(self.p):
                     X_temp = np.concatenate([self.X, (self.X[:, i]*self.X[:, j]).reshape((-1, 1))], axis=1)
-                    logit = self._fit_logit(X_temp, self.Y.flatten())
+                    logit = self._fit_logit(sm.add_constant(X_temp, prepend=True), self.Y.flatten())
                     if hasattr(logit, "llf"):
                         LR = 2*(logit.llf - LR_benchmark[0])
                         df_diff = logit.df_model - LR_benchmark[1]
@@ -1319,7 +1303,7 @@ class logistic_regression:
                         BIC_hist[i, j] = logit.bic - self.logit.bic
 
                     X_temp = np.concatenate([self.X_train, (self.X_train[:, i]*self.X_train[:, j]).reshape((-1, 1))], axis=1)
-                    logit = self._fit_logit(X_temp, self.Y_train.flatten())
+                    logit = self._fit_logit(sm.add_constant(X_temp, prepend=True), self.Y_train.flatten())
                     X_test_temp = np.concatenate([self.X_test, (self.X_test[:, i]*self.X_test[:, j]).reshape((-1, 1))], axis=1)
                     Y_pred = logit.predict(sm.add_constant(X_test_temp, prepend=True)).reshape(-1, 1)
                     Y_pred_binary = (Y_pred.flatten() >= 0.5).astype(int).reshape((-1, 1))
@@ -1361,94 +1345,6 @@ class logistic_regression:
             plt.colorbar()
             plt.title(r"$(CV_{error} - CV_{error, bench})/CV_{error, bench}$")
             plt.suptitle("Polynomial model comparison")
-            plt.tight_layout()
-
-        if ("interaction_term" in method) and (self.c > 2):
-            if class_ == 0:
-                raise Exception("Class 0 is the base class for multi-class logistic regression.")
-            LR_hist = np.zeros((self.p, self.p)); LR_hist[:] = np.nan
-            AIC_hist = np.zeros((self.p, self.p)); AIC_hist[:] = np.nan
-            BIC_hist = np.zeros((self.p, self.p)); BIC_hist[:] = np.nan
-            CV_error = np.zeros((self.p, self.p)); CV_error[:] = np.nan
-
-            obs_idx = np.where((self.Y.flatten() == class_) | (self.Y.flatten() == 0))[0]
-            X_subclass = self.X[obs_idx, :]
-            Y_subclass = self.Y[obs_idx, :].reshape(-1, 1)
-            Y_subclass = (Y_subclass.flatten() == class_).astype(int).reshape(-1, 1)
-
-            obs_idx_train = np.where((self.Y_train.flatten() == class_) | (self.Y_train.flatten() == 0))[0]
-            X_train_subclass = self.X_train[obs_idx_train, :]
-            Y_train_subclass = self.Y_train[obs_idx_train, :].reshape(-1, 1)
-            Y_train_subclass = (Y_train_subclass.flatten() == class_).astype(int).reshape(-1, 1)
-
-            obs_idx_test = np.where((self.Y_test.flatten() == class_) | (self.Y_test.flatten() == 0))[0]
-            X_test_subclass = self.X_test[obs_idx_test, :]
-            Y_test_subclass = self.Y_test[obs_idx_test, :].reshape(-1, 1)
-            Y_test_subclass = (Y_test_subclass.flatten() == class_).astype(int).reshape(-1, 1)
-
-            logit= self._fit_logit(X_subclass, Y_subclass.flatten())
-            if hasattr(logit, "llf"):
-                LR_benchmark = (logit.llf, logit.df_model)
-
-            logit = self._fit_logit(X_train_subclass, Y_train_subclass.flatten())
-            Y_pred = logit.predict(sm.add_constant(X_test_subclass, prepend=True)).reshape((-1, 1))
-            Y_pred_binary = (Y_pred.flatten() >= 0.5).astype(int).reshape((-1, 1))
-            CV_error_benchmark = np.mean(np.abs(Y_test_subclass - Y_pred_binary))
-
-            for i in range(self.p):
-                for j in range(self.p):
-                    X_temp = np.concatenate([X_subclass, (X_subclass[:, i]*X_subclass[:, j]).reshape((-1, 1))], axis=1)
-                    logit = self._fit_logit(X_temp, Y_subclass.flatten())
-                    if hasattr(logit, "llf"):
-                        LR = 2*(logit.llf - LR_benchmark[0])
-                        df_diff = logit.df_model - LR_benchmark[1]
-                        LR_hist[i, j] = scipy.stats.chi2.sf(LR, df_diff)
-                        AIC_hist[i, j] = logit.aic - self.logit.aic
-                        BIC_hist[i, j] = logit.bic - self.logit.bic
-
-                    X_temp = np.concatenate([X_train_subclass, (X_train_subclass[:, i]*X_train_subclass[:, j]).reshape((-1, 1))], axis=1)
-                    logit= self._fit_logit(X_temp, Y_train_subclass.flatten())
-                    X_test_temp = np.concatenate([X_test_subclass, (X_test_subclass[:, i]*X_test_subclass[:, j]).reshape((-1, 1))], axis=1)
-                    Y_pred = logit.predict(sm.add_constant(X_test_temp, prepend=True)).reshape(-1, 1)
-                    Y_pred_binary = (Y_pred.flatten() >= 0.5).astype(int).reshape(-1, 1)
-                    CV_error_current = np.mean(np.abs(Y_test_subclass - Y_pred_binary))
-                    CV_error[i, j] = (CV_error_current - CV_error_benchmark) / CV_error_benchmark
-
-            self.nonlinearity_test["interaction_term_metric"] = [LR_hist, AIC_hist, BIC_hist, CV_error]
-
-            plt.figure(figsize=(10, 10))
-            plt.subplot(2, 2, 1)
-            colors = ['red', 'yellow', 'green']
-            bounds = [0, 0.01, 0.05, 1]
-            cmap = matplotlib.colors.ListedColormap(colors)
-            norm = matplotlib.colors.BoundaryNorm(bounds, cmap.N)
-            plt.imshow(LR_hist, cmap=cmap, norm=norm)
-            plt.xticks(range(self.p), self.X_columns, rotation=90)
-            plt.yticks(range(self.p), self.X_columns)
-            plt.colorbar()
-            plt.title(r"p-value of likelihood-ratio test")
-
-            plt.subplot(2, 2, 2)
-            plt.imshow(AIC_hist, cmap='Reds_r', vmax=0, aspect='auto')
-            plt.xticks(range(self.p), self.X_columns, rotation=90)
-            plt.yticks(range(self.p), self.X_columns)
-            plt.colorbar()
-            plt.title(r"$AIC - AIC_{bench}$")
-
-            plt.subplot(2, 2, 3)    
-            plt.imshow(BIC_hist, cmap='Reds_r', vmax=0, aspect='auto')
-            plt.xticks(range(self.p), self.X_columns, rotation=90)
-            plt.yticks(range(self.p), self.X_columns)
-            plt.colorbar()
-            plt.title(r"$BIC - BIC_{bench}$")
-
-            plt.subplot(2, 2, 4)
-            plt.imshow(CV_error, cmap='Reds_r', vmax=0, aspect='auto')
-            plt.xticks(range(self.p), self.X_columns, rotation=90)
-            plt.yticks(range(self.p), self.X_columns)
-            plt.colorbar()
-            plt.title(r"$(CV_{error} - CV_{error, bench})/CV_{error, bench}$")
-            plt.suptitle("Polynomial model comparison for class {}".format(class_))
             plt.tight_layout()
 
         return self.nonlinearity_test
@@ -1574,24 +1470,14 @@ class logistic_regression:
         if not hasattr(self, "logit"):
             raise Exception("Fit the model first.")
         self.seperation_hist = []
-        if self.c == 2:
-            idx_1 = np.where(self.Y.flatten() == 1)[0]
-            idx_0 = np.where(self.Y.flatten() == 0)[0]
-            for j in range(self.p):
-                x1 = self.X[idx_1, j]; x0 = self.X[idx_0, j]
-                if np.min(x1) > np.max(x0) or np.min(x0) > np.max(x1):
-                    print("Perfect seperation in feature %s." % self.X_columns[j])
-                    self.seperation_hist.append(j)
-        else:
-            for c in range(1, self.c):
-                idx_c = np.where(self.Y.flatten() == c)[0]
-                idx_0 = np.where(self.Y.flatten() == 0)[0]
-                for j in range(self.p):
-                    xc = self.X[idx_c, j]; x0 = self.X[idx_0, j]
-                    if np.min(xc) > np.max(x0) or np.min(x0) > np.max(xc):
-                        print("Perfect seperation in feature %s for class %d." % (self.X_columns[j], c))
-                        self.seperation_hist.append((c, j))
-        
+        idx_1 = np.where(self.Y.flatten() == 1)[0]
+        idx_0 = np.where(self.Y.flatten() == 0)[0]
+        for j in range(self.p):
+            x1 = self.X[idx_1, j]; x0 = self.X[idx_0, j]
+            if np.min(x1) > np.max(x0) or np.min(x0) > np.max(x1):
+                print("Perfect seperation in feature %s." % self.X_columns[j])
+                self.seperation_hist.append(j)
+
         if len(self.seperation_hist) == 0:
             print("No perfect seperation found in the data.")
         return self.seperation_hist
@@ -1622,8 +1508,6 @@ class logistic_regression:
         '''
         if not hasattr(self, "logit"):
             raise Exception("Fit the model first.")
-        if self.c != 2:
-            raise Exception("Outlier detection is currently only implemented for binary logistic regression.")
 
         self.outlier_test = {}
         # Pearson residuals
@@ -1655,7 +1539,7 @@ class logistic_regression:
             for i in range(self.n):
                 X_temp = self.X[~(np.arange(self.n) == i), :]
                 Y_temp = self.Y[~(np.arange(self.n) == i), :]
-                logit = self._fit_logit(X_temp, Y_temp.flatten(), disp=False)
+                logit = self._fit_logit(sm.add_constant(X_temp, prepend=True), Y_temp.flatten())
                 if hasattr(logit, "params") and hasattr(logit, "bse"):
                     beta_diff = (self.logit.params[1:] - logit.params[1:])/self.logit.bse[1:]
                 if any(np.abs(beta_diff) > 2/ np.sqrt(self.n)):
@@ -1678,7 +1562,7 @@ class logistic_regression:
             y_min, y_max = plt.gca().get_ylim()
             plt.hlines(y=2*self.p/self.n, xmin=x_min, xmax=x_max, color='red', linestyle='--')
             plt.vlines(x=[-2, 2], ymin=y_min, ymax=y_max, color='red', linestyle='--')
-            plt.fill_between([-2, 2], 0, 2*self.p/self.n, color="green", alpha=0.2, label="not outlier")
+            plt.fill_between([-2, 2], 0, 2*self.p/self.n, color="green", alpha=0.2, label="not outlier/influential obs.")
             plt.legend()
             plt.xlabel("external studentized residuals"); plt.ylabel("leverage")
 
@@ -1709,8 +1593,7 @@ class logistic_regression:
 
         return:
             returns of all feature selection methods above 
-        '''          
-        
+        '''
         self.selected_feature = collections.defaultdict(list)
         self.feature_selection_best_subset(criterion="accuracy (out-of-sample)", is_plot=is_plot)
         self.feature_selection_forward_stepwise(criterion="accuracy (out-of-sample)", is_plot=is_plot)
@@ -1722,6 +1605,8 @@ class logistic_regression:
             plt.plot(np.arange(1, self.p+1, 1), [self.feature_selection_forward_stepwise_summary[i][4] for i in range(1, self.p+1)], "-o", label="forward stepwise")
             #plt.plot(np.arange(1, self.p+1, 1), [self.feature_selection_ridge_summary[i][1] for i in range(1, self.p+1)], "-o", label="ridge")
             plt.plot([i for i in np.arange(1, self.p+1, 1) if i in self.feature_selection_lasso_summary.keys()], [self.feature_selection_lasso_summary[i][1] for i in np.arange(1, self.p+1, 1) if i in self.feature_selection_lasso_summary.keys()], "-o", label="lasso")
+            plt.hlines(y=self.feature_selection_best_subset_summary[0][4], xmin=plt.gca().get_xlim()[0], xmax=plt.gca().get_xlim()[1],
+                       color='gray', linestyle='--', label="no feature")
             plt.xlabel("number of features")
             plt.ylabel("accuracy (out-of-sample)")
             plt.title("Feature selection")
@@ -1773,7 +1658,6 @@ class logistic_regression:
             plt.xlabel("selected feature")
             plt.ylabel("feature number")
             plt.title("Lasso selection")
-
             plt.suptitle("feature selection")
             plt.tight_layout()
 
@@ -1791,85 +1675,81 @@ class logistic_regression:
         self.feature_selection_best_subset_summary = collections.defaultdict(list)
         self.feature_selection_best_subset_summary["feature_number"] = ["feature_idx", "accuracy (in-sample)", "AIC (in-sample)", "BIC (in-sample)", "accuracy (out-of-sample)"]
 
-        if self.c == 2:
-            log = collections.defaultdict(list)
-            logit = self._fit_logit(np.zeros((self.n, 0)), self.Y.flatten(), disp=False)
-            Y_pred = logit.predict(np.ones((self.n, 1))).reshape(-1, 1)
-            Y_pred_binary = (Y_pred.flatten() >= 0.5).astype(int).reshape(-1, 1)
-            accuracy_is = 1 - np.mean(np.abs(self.Y - Y_pred_binary))
+        log = collections.defaultdict(list)
+        logit = self._fit_logit(sm.add_constant(self.X, prepend=True)[:, [0]], self.Y.flatten(), disp=False)
+        Y_pred = logit.predict(sm.add_constant(self.X, prepend=True)[:, [0]]).reshape(-1, 1)
+        Y_pred_binary = (Y_pred.flatten() >= 0.5).astype(int).reshape(-1, 1)
+        accuracy_is = 1 - np.mean(np.abs(self.Y - Y_pred_binary))
 
-            logit_oos = self._fit_logit(np.zeros((self.Y_train.shape[0], 0)), self.Y_train.flatten(), disp=False)
-            Y_pred = logit_oos.predict(np.ones((self.Y_test.shape[0], 1))).reshape(-1, 1)
-            Y_pred_binary = (Y_pred.flatten() >= 0.5).astype(int).reshape(-1, 1)
-            accuracy_oos = 1 - np.mean(np.abs(self.Y_test - Y_pred_binary))
-            if hasattr(logit, "aic") and hasattr(logit, "bic"):
-                log[0].append([[], accuracy_is, logit.aic, logit.bic, accuracy_oos])
-            else:
-                log[0].append([[], accuracy_is, np.nan, np.nan, accuracy_oos])
+        logit_oos = self._fit_logit(sm.add_constant(self.X_train, prepend=True)[:, [0]], self.Y_train.flatten(), disp=False)
+        Y_pred = logit_oos.predict(sm.add_constant(self.X_test, prepend=True)[:, [0]]).reshape(-1, 1)
+        Y_pred_binary = (Y_pred.flatten() >= 0.5).astype(int).reshape(-1, 1)
+        accuracy_oos = 1 - np.mean(np.abs(self.Y_test - Y_pred_binary))
+        if hasattr(logit, "aic") and hasattr(logit, "bic"):
+            log[0].append([[], accuracy_is, logit.aic, logit.bic, accuracy_oos])
+        else:
+            log[0].append([[], accuracy_is, np.nan, np.nan, accuracy_oos])
 
-            for feature_num in range(1, self.p + 1):
-                for feature_idx in itertools.combinations(range(0, self.p), feature_num):
-                    feature_idx = list(feature_idx)
-                    logit = self._fit_logit(self.X[:, feature_idx], self.Y.flatten(), disp=False)
-                    Y_pred = logit.predict(sm.add_constant(self.X[:, feature_idx], prepend=True)).reshape(-1, 1)
-                    Y_pred_binary = (Y_pred.flatten() >= 0.5).astype(int).reshape(-1, 1)
-                    accuracy_is = 1- np.mean(np.abs(self.Y - Y_pred_binary))
+        for feature_num in range(1, self.p + 1):
+            for feature_idx in itertools.combinations(range(0, self.p), feature_num):
+                feature_idx = list(feature_idx)
+                logit = self._fit_logit(sm.add_constant(self.X[:, feature_idx], prepend=True), self.Y.flatten(), disp=False)
+                Y_pred = logit.predict(sm.add_constant(self.X[:, feature_idx], prepend=True)).reshape(-1, 1)
+                Y_pred_binary = (Y_pred.flatten() >= 0.5).astype(int).reshape(-1, 1)
+                accuracy_is = 1- np.mean(np.abs(self.Y - Y_pred_binary))
 
-                    logit_oos = self._fit_logit(self.X_train[:, feature_idx], self.Y_train.flatten(), disp=False)
-                    Y_pred = logit_oos.predict(sm.add_constant(self.X_test[:, feature_idx], prepend=True)).reshape(-1, 1)
-                    Y_pred_binary = (Y_pred.flatten() >= 0.5).astype(int).reshape(-1, 1)
-                    accuracy_oos = 1- np.mean(np.abs(self.Y_test - Y_pred_binary))
+                logit_oos = self._fit_logit(sm.add_constant(self.X_train[:, feature_idx], prepend=True), self.Y_train.flatten(), disp=False)
+                Y_pred = logit_oos.predict(sm.add_constant(self.X_test[:, feature_idx], prepend=True)).reshape(-1, 1)
+                Y_pred_binary = (Y_pred.flatten() >= 0.5).astype(int).reshape(-1, 1)
+                accuracy_oos = 1- np.mean(np.abs(self.Y_test - Y_pred_binary))
 
-                    if hasattr(logit, "aic") and hasattr(logit, "bic"):
-                        log[feature_num].append([feature_idx, accuracy_is, logit.aic, logit.bic, accuracy_oos])
-                    else:
-                        log[feature_num].append([feature_idx, accuracy_is, np.nan, np.nan, accuracy_oos])
+                if hasattr(logit, "aic") and hasattr(logit, "bic"):
+                    log[feature_num].append([feature_idx, accuracy_is, logit.aic, logit.bic, accuracy_oos])
+                else:
+                    log[feature_num].append([feature_idx, accuracy_is, np.nan, np.nan, accuracy_oos])
 
-            plt.figure(figsize=(8, 6))
-            plt.subplot(4, 1, 1)
-            for feature_num in np.arange(0, self.p + 1):
-                log[feature_num].sort(reverse=True, key=lambda x: x[1])
-                plt.plot([feature_num for _ in range(len(log[feature_num]))], [i[1] for i in log[feature_num]], "o", color="gray")
-                if criterion == "accuracy (in-sample)":
-                    print("feature_num: %d, best feature: %s, accuracy (in-sample): %.4f, AIC (in-sample): %.4f, BIC (in-sample): %.4f, accuracy (out-of-sample): %.4f" % (feature_num, log[feature_num][0][0], log[feature_num][0][1], log[feature_num][0][2], log[feature_num][0][3], log[feature_num][0][4]))
-                    self.feature_selection_best_subset_summary[feature_num] = log[feature_num][0]
-            plt.plot(np.arange(0, self.p + 1), [log[i][0][1] for i in np.arange(0, self.p+1, 1)], "o-", color="red")
-            plt.xlabel("feature number"); plt.ylabel("accuracy (in-sample)")
+        plt.figure(figsize=(8, 6))
+        plt.subplot(4, 1, 1)
+        for feature_num in np.arange(0, self.p + 1):
+            log[feature_num].sort(reverse=True, key=lambda x: x[1])
+            plt.plot([feature_num for _ in range(len(log[feature_num]))], [i[1] for i in log[feature_num]], "o", color="gray")
+            if criterion == "accuracy (in-sample)":
+                print("feature_num: %d, best feature: %s, accuracy (in-sample): %.4f, AIC (in-sample): %.4f, BIC (in-sample): %.4f, accuracy (out-of-sample): %.4f" % (feature_num, log[feature_num][0][0], log[feature_num][0][1], log[feature_num][0][2], log[feature_num][0][3], log[feature_num][0][4]))
+                self.feature_selection_best_subset_summary[feature_num] = log[feature_num][0]
+        plt.plot(np.arange(0, self.p + 1), [log[i][0][1] for i in np.arange(0, self.p+1, 1)], "o-", color="red")
+        plt.xlabel("feature number"); plt.ylabel("accuracy (in-sample)")
 
-            plt.subplot(4, 1, 2)
-            for feature_num in np.arange(0, self.p + 1):
-                log[feature_num].sort(reverse=True, key=lambda x: x[2])
-                plt.plot([feature_num for _ in range(len(log[feature_num]))], [i[2] for i in log[feature_num]], "o", color="gray")
-                if criterion == "AIC (in-sample)":
-                    print("feature_num: %d, best feature: %s, accuracy (in-sample): %.4f, AIC (in-sample): %.4f, BIC (in-sample): %.4f, accuracy (out-of-sample): %.4f" % (feature_num, log[feature_num][0][0], log[feature_num][0][1], log[feature_num][0][2], log[feature_num][0][3], log[feature_num][0][4]))
-                    self.feature_selection_best_subset_summary[feature_num] = log[feature_num][0]
-            plt.plot(np.arange(0, self.p + 1), [log[i][0][2] for i in np.arange(0, self.p+1, 1)], "o-", color="red")
-            plt.xlabel("feature number"); plt.ylabel("AIC (in-sample)")
+        plt.subplot(4, 1, 2)
+        for feature_num in np.arange(0, self.p + 1):
+            log[feature_num].sort(reverse=True, key=lambda x: x[2])
+            plt.plot([feature_num for _ in range(len(log[feature_num]))], [i[2] for i in log[feature_num]], "o", color="gray")
+            if criterion == "AIC (in-sample)":
+                print("feature_num: %d, best feature: %s, accuracy (in-sample): %.4f, AIC (in-sample): %.4f, BIC (in-sample): %.4f, accuracy (out-of-sample): %.4f" % (feature_num, log[feature_num][0][0], log[feature_num][0][1], log[feature_num][0][2], log[feature_num][0][3], log[feature_num][0][4]))
+                self.feature_selection_best_subset_summary[feature_num] = log[feature_num][0]
+        plt.plot(np.arange(0, self.p + 1), [log[i][0][2] for i in np.arange(0, self.p+1, 1)], "o-", color="red")
+        plt.xlabel("feature number"); plt.ylabel("AIC (in-sample)")
 
-            plt.subplot(4, 1, 3)
-            for feature_num in np.arange(0, self.p + 1):
-                log[feature_num].sort(reverse=True, key=lambda x: x[3])
-                plt.plot([feature_num for _ in range(len(log[feature_num]))], [i[3] for i in log[feature_num]], "o", color="gray")
-                if criterion == "BIC (in-sample)":
-                    print("feature_num: %d, best feature: %s, accuracy (in-sample): %.4f, AIC (in-sample): %.4f, BIC (in-sample): %.4f, accuracy (out-of-sample): %.4f" % (feature_num, log[feature_num][0][0], log[feature_num][0][1], log[feature_num][0][2], log[feature_num][0][3], log[feature_num][0][4]))
-                    self.feature_selection_best_subset_summary[feature_num] = log[feature_num][0]
-            plt.plot(np.arange(0, self.p + 1), [log[i][0][3] for i in np.arange(0, self.p+1, 1)], "o-", color="red")
-            plt.xlabel("feature number"); plt.ylabel("BIC (in-sample)")
+        plt.subplot(4, 1, 3)
+        for feature_num in np.arange(0, self.p + 1):
+            log[feature_num].sort(reverse=True, key=lambda x: x[3])
+            plt.plot([feature_num for _ in range(len(log[feature_num]))], [i[3] for i in log[feature_num]], "o", color="gray")
+            if criterion == "BIC (in-sample)":
+                print("feature_num: %d, best feature: %s, accuracy (in-sample): %.4f, AIC (in-sample): %.4f, BIC (in-sample): %.4f, accuracy (out-of-sample): %.4f" % (feature_num, log[feature_num][0][0], log[feature_num][0][1], log[feature_num][0][2], log[feature_num][0][3], log[feature_num][0][4]))
+                self.feature_selection_best_subset_summary[feature_num] = log[feature_num][0]
+        plt.plot(np.arange(0, self.p + 1), [log[i][0][3] for i in np.arange(0, self.p+1, 1)], "o-", color="red")
+        plt.xlabel("feature number"); plt.ylabel("BIC (in-sample)")
 
-            plt.subplot(4, 1, 4)
-            for feature_num in np.arange(0, self.p + 1):
-                log[feature_num].sort(reverse=True, key=lambda x: x[4])
-                plt.plot([feature_num for _ in range(len(log[feature_num]))], [i[4] for i in log[feature_num]], "o", color="gray")
-                if criterion == "accuracy (out-of-sample)":
-                    print("feature_num: %d, best feature: %s, accuracy (in-sample): %.4f, AIC (in-sample): %.4f, BIC (in-sample): %.4f, accuracy (out-of-sample): %.4f" % (feature_num, log[feature_num][0][0], log[feature_num][0][1], log[feature_num][0][2], log[feature_num][0][3], log[feature_num][0][4]))
-                    self.feature_selection_best_subset_summary[feature_num] = log[feature_num][0]
-            plt.plot(np.arange(0, self.p + 1), [log[i][0][4] for i in np.arange(0, self.p+1, 1)], "o-", color="red")
-            plt.xlabel("feature number"); plt.ylabel("accuracy (out-of-sample)")
-            plt.suptitle("Feature selection by best subset selection with criterion: %s" % criterion)
-            plt.tight_layout()
-
-        if self.c > 2:
-            raise Exception("Feature selection by best subset is currently only implemented for binary logistic regression.")
+        plt.subplot(4, 1, 4)
+        for feature_num in np.arange(0, self.p + 1):
+            log[feature_num].sort(reverse=True, key=lambda x: x[4])
+            plt.plot([feature_num for _ in range(len(log[feature_num]))], [i[4] for i in log[feature_num]], "o", color="gray")
+            if criterion == "accuracy (out-of-sample)":
+                print("feature_num: %d, best feature: %s, accuracy (in-sample): %.4f, AIC (in-sample): %.4f, BIC (in-sample): %.4f, accuracy (out-of-sample): %.4f" % (feature_num, log[feature_num][0][0], log[feature_num][0][1], log[feature_num][0][2], log[feature_num][0][3], log[feature_num][0][4]))
+                self.feature_selection_best_subset_summary[feature_num] = log[feature_num][0]
+        plt.plot(np.arange(0, self.p + 1), [log[i][0][4] for i in np.arange(0, self.p+1, 1)], "o-", color="red")
+        plt.xlabel("feature number"); plt.ylabel("accuracy (out-of-sample)")
+        plt.suptitle("Feature selection by best subset selection with criterion: %s" % criterion)
+        plt.tight_layout()
 
         if not is_plot:
             plt.close(plt.gcf())
@@ -1890,55 +1770,51 @@ class logistic_regression:
         self.feature_selection_forward_stepwise_summary = collections.defaultdict(list)
         self.feature_selection_forward_stepwise_summary["feature_number"] = ["feature_idx", "accuracy (in-sample)", "AIC (in-sample)", "BIC (in-sample)", "accuracy (out-of-sample)"]
 
-        if self.c == 2:
-            selected_feature = set()
-            log = collections.defaultdict(list)
-            logit = self._fit_logit(np.zeros((self.n, 0)), self.Y.flatten(), disp=False)
-            Y_pred = logit.predict(np.ones((self.n, 1))).reshape(-1, 1)
-            Y_pred_binary = (Y_pred.flatten() >= 0.5).astype(int).reshape(-1, 1)
-            accuracy_is = 1 - np.mean(np.abs(self.Y - Y_pred_binary))
+        selected_feature = set()
+        log = collections.defaultdict(list)
+        logit = self._fit_logit(sm.add_constant(self.X, prepend=True)[:, [0]], self.Y.flatten(), disp=False)
+        Y_pred = logit.predict(sm.add_constant(self.X, prepend=True)[:, [0]]).reshape(-1, 1)
+        Y_pred_binary = (Y_pred.flatten() >= 0.5).astype(int).reshape(-1, 1)
+        accuracy_is = 1 - np.mean(np.abs(self.Y - Y_pred_binary))
 
-            logit_oos = self._fit_logit(np.zeros((self.Y_train.shape[0], 0)), self.Y_train.flatten(), disp=False)
-            Y_pred = logit_oos.predict(np.ones((self.Y_test.shape[0], 1))).reshape(-1, 1)
-            Y_pred_binary = (Y_pred.flatten() >= 0.5).astype(int).reshape(-1, 1)
-            accuracy_oos = 1 - np.mean(np.abs(self.Y_test - Y_pred_binary))
-            if hasattr(logit, "aic") and hasattr(logit, "bic"):
-                log[0].append([[], accuracy_is, logit.aic, logit.bic, accuracy_oos])
-            else:
-                log[0].append([[], accuracy_is, np.nan, np.nan, accuracy_oos])
+        logit_oos = self._fit_logit(sm.add_constant(self.X_train, prepend=True)[:, [0]], self.Y_train.flatten(), disp=False)
+        Y_pred = logit_oos.predict(sm.add_constant(self.X_test, prepend=True)[:, [0]]).reshape(-1, 1)
+        Y_pred_binary = (Y_pred.flatten() >= 0.5).astype(int).reshape(-1, 1)
+        accuracy_oos = 1 - np.mean(np.abs(self.Y_test - Y_pred_binary))
+        if hasattr(logit, "aic") and hasattr(logit, "bic"):
+            log[0].append([[], accuracy_is, logit.aic, logit.bic, accuracy_oos])
+        else:
+            log[0].append([[], accuracy_is, np.nan, np.nan, accuracy_oos])
 
-            for feature_num in np.arange(1, self.p+1, 1):
-                for feature_idx in range(self.p):
-                    if feature_idx not in selected_feature:
-                        logit = self._fit_logit(self.X[:, list(selected_feature) + [feature_idx]], self.Y)
-                        Y_pred = logit.predict(sm.add_constant(self.X[:, list(selected_feature) + [feature_idx]], prepend=True)).reshape(-1, 1)
-                        Y_pred_binary = (Y_pred.flatten() >= 0.5).astype(int).reshape(-1, 1)
-                        accuracy_is = 1 - np.mean(np.abs(self.Y - Y_pred_binary))
+        for feature_num in np.arange(1, self.p+1, 1):
+            for feature_idx in range(self.p):
+                if feature_idx not in selected_feature:
+                    logit = self._fit_logit(sm.add_constant(self.X[:, list(selected_feature) + [feature_idx]], prepend=True), self.Y)
+                    Y_pred = logit.predict(sm.add_constant(self.X[:, list(selected_feature) + [feature_idx]], prepend=True)).reshape(-1, 1)
+                    Y_pred_binary = (Y_pred.flatten() >= 0.5).astype(int).reshape(-1, 1)
+                    accuracy_is = 1 - np.mean(np.abs(self.Y - Y_pred_binary))
 
-                        logit_oos = self._fit_logit(self.X_train[:, list(selected_feature) + [feature_idx]], self.Y_train)
-                        Y_pred = logit_oos.predict(sm.add_constant(self.X_test[:, list(selected_feature) + [feature_idx]], prepend=True)).reshape(-1, 1)
-                        Y_pred_binary = (Y_pred.flatten() >= 0.5).astype(int).reshape(-1, 1)
-                        accuracy_oos = 1 - np.mean(np.abs(self.Y_test - Y_pred_binary))
-                        if hasattr(logit, "aic") and hasattr(logit, "bic"):
-                            log[feature_num].append([list(selected_feature) + [feature_idx], accuracy_is, logit.aic, logit.bic, accuracy_oos])
-                        else:
-                            log[feature_num].append([list(selected_feature) + [feature_idx], accuracy_is, np.nan, np.nan, accuracy_oos])
+                    logit_oos = self._fit_logit(sm.add_constant(self.X_train[:, list(selected_feature) + [feature_idx]], prepend=True), self.Y_train)
+                    Y_pred = logit_oos.predict(sm.add_constant(self.X_test[:, list(selected_feature) + [feature_idx]], prepend=True)).reshape(-1, 1)
+                    Y_pred_binary = (Y_pred.flatten() >= 0.5).astype(int).reshape(-1, 1)
+                    accuracy_oos = 1 - np.mean(np.abs(self.Y_test - Y_pred_binary))
+                    if hasattr(logit, "aic") and hasattr(logit, "bic"):
+                        log[feature_num].append([list(selected_feature) + [feature_idx], accuracy_is, logit.aic, logit.bic, accuracy_oos])
+                    else:
+                        log[feature_num].append([list(selected_feature) + [feature_idx], accuracy_is, np.nan, np.nan, accuracy_oos])
 
-                if criterion == "accuracy (in-sample)":
-                    log[feature_num].sort(reverse=True, key=lambda x: x[1])
-                if criterion == "AIC (in-sample)":
-                    log[feature_num].sort(reverse=False, key=lambda x: x[2])
-                if criterion == "BIC (in-sample)":
-                    log[feature_num].sort(reverse=False, key=lambda x: x[3])
-                if criterion == "accuracy (out-of-sample)":
-                    log[feature_num].sort(reverse=True, key=lambda x: x[4])
-                selected_feature.add(log[feature_num][0][0][-1])
-                print("feature_num: %d, best feature: %s, accuracy (in-sample): %.4f, AIC (in-sample): %.4f, BIC (in-sample): %.4f, accuracy (out-of-sample): %.4f" % (feature_num, log[feature_num][0][0], log[feature_num][0][1], log[feature_num][0][2], log[feature_num][0][3], log[feature_num][0][4]))
-                self.feature_selection_forward_stepwise_summary[feature_num] = log[feature_num][0]
+            if criterion == "accuracy (in-sample)":
+                log[feature_num].sort(reverse=True, key=lambda x: x[1])
+            if criterion == "AIC (in-sample)":
+                log[feature_num].sort(reverse=False, key=lambda x: x[2])
+            if criterion == "BIC (in-sample)":
+                log[feature_num].sort(reverse=False, key=lambda x: x[3])
+            if criterion == "accuracy (out-of-sample)":
+                log[feature_num].sort(reverse=True, key=lambda x: x[4])
+            selected_feature.add(log[feature_num][0][0][-1])
+            print("feature_num: %d, best feature: %s, accuracy (in-sample): %.4f, AIC (in-sample): %.4f, BIC (in-sample): %.4f, accuracy (out-of-sample): %.4f" % (feature_num, log[feature_num][0][0], log[feature_num][0][1], log[feature_num][0][2], log[feature_num][0][3], log[feature_num][0][4]))
+            self.feature_selection_forward_stepwise_summary[feature_num] = log[feature_num][0]
         
-        if self.c > 2:
-            raise Exception("Feature selection by forward stepwise is currently only implemented for binary logistic regression.")
-
         if is_plot:
             plt.figure(figsize=(8, 6))
             plt.subplot(4,1,1)
@@ -2063,8 +1939,8 @@ class logistic_regression:
         If all methods fail, use sklearn's LogisticRegression with L2 regularization.
 
         params:
-            X: np.ndarray, shape (n_samples, n_features). 
-                Input data without intercept because the intercept is automatically added in the function.
+            X: np.ndarray, shape (n_samples, n_features).
+                Input data with intercept, consistent with statsmodels' default.
             Y: np.ndarray, shape (n_samples), target data
             disp: bool, whether to print the fitting process
 
@@ -2079,16 +1955,16 @@ class logistic_regression:
         fit_method = ["newton", "bfgs", "lbfgs", "powell", "cg", "ncg", "basinhopping"]
         for method in fit_method:
             try:
-                logit = statsmodels.api.Logit(Y, sm.add_constant(X, prepend=True)).fit(disp=False, method=method)
+                logit = statsmodels.api.Logit(Y, X).fit(disp=False, method=method)
                 if disp:
                     print("Logistic regression converged with method: %s" % method)
                 break
             except:
-                pass
+                if disp:
+                    print("Logistic regression failed to converge with method: %s" % method)
         if logit is None:
             logit = sklearn.linear_model.LogisticRegression(penalty='l2', C=1.0, fit_intercept=False)
-            logit.fit(sm.add_constant(X, prepend=True), Y.flatten())
-        
+            logit.fit(X, Y.flatten())
         return logit
 
     def _smoother(self, x, y, type="polynomial"):
@@ -2135,6 +2011,7 @@ class logistic_regression:
 
         raise Exception("Unknown type for smoother: %s" % type)
 
+'''
 is_binary = True
 data = pd.read_csv(os.path.join(os.path.dirname(__file__), "data_from_ESL/vowel_train.csv"), index_col=0)
 X = data.iloc[:, 1:].to_numpy()
@@ -2148,9 +2025,15 @@ Y_test = data.iloc[:, 0].to_numpy().reshape(-1, 1) - 1
 if is_binary:
     idx = np.where(Y_test.flatten() <= 1)[0]
     X_test = X_test[idx, :]; Y_test = Y_test[idx, :]
+'''
 
-#model = logistic_regression_vanilla(X, Y, X_test=X_test, Y_test=Y_test, is_normalize=True, test_size_ratio=0.2)
-#model.fit(is_output=False)
+data = pd.read_csv(os.path.join(os.path.dirname(__file__), "data_from_ESL/south_african_heart_disease.csv"), index_col=0)
+data["famhist"] = data["famhist"].map({"Present": 1, "Absent": 0})
+X = data.iloc[:, 0:(data.shape[1]-1)].to_numpy()
+Y = data.iloc[:, -1].to_numpy().reshape(-1, 1)
+
+model = logistic_regression_binary(X, Y, X_test=None, Y_test=None, X_columns=data.columns[0:(data.shape[1]-1)], is_normalize=True, test_size_ratio=0.2)
+model.fit(is_output=False)
 #_ = model.predict(X_test)
 #model.visualize_data()
 #_ = model.nonlinearity()
@@ -2161,9 +2044,6 @@ if is_binary:
 #_ = model.feature_selection_forward_stepwise(criterion="accuracy (out-of-sample)", is_plot=True)
 #model.feature_selection_ridge_lasso(beta_threshold=1e-3, is_plot=True)
 #model.feature_selection_all(is_plot=True)
-
-#%%
-
 
 
 

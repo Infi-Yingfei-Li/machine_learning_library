@@ -275,7 +275,6 @@ class linear_regression:
             self.nonlinearity_test: dict
                 - "RESET" -- RESET test p-value
                 - "interaction_term_metric" -- [p-value of F-statistics, AIC, BIC, out-of-sample R^2]
-
         '''
         if not hasattr(self, "ols"):
             raise Exception("Fit the model first.")
@@ -950,6 +949,8 @@ class linear_regression:
             #plt.plot(np.arange(1, self.p+1, 1), [self.feature_selection_ridge_summary[i][1] for i in range(1, self.p+1)], "-o", label="ridge")
             plt.plot([i for i in np.arange(1, self.p+1, 1) if i in self.feature_selection_lasso_summary.keys()], [self.feature_selection_lasso_summary[i][1] for i in np.arange(1, self.p+1, 1) if i in self.feature_selection_lasso_summary.keys()], "-o", label="lasso")
             plt.plot([i for i in np.arange(1, self.p+1, 1) if i in self.feature_selection_least_angle_regression_summary.keys()], [self.feature_selection_least_angle_regression_summary[i][1] for i in np.arange(1, self.p+1, 1) if i in self.feature_selection_least_angle_regression_summary.keys()], "-o", label="least angle regression")
+            plt.hlines(y=self.feature_selection_best_subset_summary[0][4], xmin=plt.gca().get_xlim()[0], xmax=plt.gca().get_xlim()[1],
+                       color='gray', linestyle='--', label="no feature")
             plt.xlabel("number of features")
             plt.ylabel("R^2 (out-of-sample)")
             plt.title("Feature selection")
