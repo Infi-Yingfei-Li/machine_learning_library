@@ -1,6 +1,5 @@
 #%%
 import os, sys, copy, scipy, datetime, tqdm, collections, itertools, warnings, contextlib
-from turtle import color
 import numpy as np
 import pandas as pd
 
@@ -25,6 +24,8 @@ import sklearn.discriminant_analysis
 import sklearn.utils.multiclass
 
 import umap, pingouin
+
+import spline
 
 @contextlib.contextmanager
 def suppress_print():
@@ -569,7 +570,7 @@ class linear_discriminant_analysis:
             linreg = sklearn.linear_model.LinearRegression()
             linreg.fit(self.X[:, np.arange(self.p) != i], self.X[:, i])
             R2 = linreg.score(self.X[:, np.arange(self.p) != i], self.X[:, i])
-            variance_inflation_factor[i] = 1 / (1 - R2)
+            variance_inflation_factor[i] = 1 / (1 - np.clip(R2, 0, 1-1e-5))
         self.colinearity_test["variance_inflation_factor"] = variance_inflation_factor
 
         if "VIF" in method:
@@ -915,6 +916,7 @@ class linear_discriminant_analysis:
         
         return alpha_[np.argmax(accuracy)] if np.max(accuracy) > benchmark else 'auto'
 
+'''
 data = pd.read_csv(os.path.join(os.path.dirname(__file__), "data_from_ESL/vowel_train.csv"), index_col=0)
 X = data.iloc[:, 1:].to_numpy()
 Y = data.iloc[:, 0].to_numpy().reshape(-1, 1) - 1
@@ -926,15 +928,16 @@ Y_test = data.iloc[:, 0].to_numpy().reshape(-1, 1) - 1
 idx = np.where(Y_test.flatten() <= 1)[0]
 X_test = X_test[idx, :]; Y_test = Y_test[idx, :]
 
-#model = linear_discriminant_analysis(X, Y, X_test=X_test, Y_test=Y_test, is_normalize=True, test_size_ratio=0.2)
-#model.fit(solver="eigen")
-#model.visualize_data()
-#model.normality()
-#model.equal_covariance()
-#model.colinearity()
-#model.outlier(is_output=True)
-#model.feature_selection()
-#model.optimal_shrinkage_covariance(is_output=True)
+model = linear_discriminant_analysis(X, Y, X_test=X_test, Y_test=Y_test, is_normalize=True, test_size_ratio=0.2)
+model.fit(solver="eigen")
+model.visualize_data()
+model.normality()
+model.equal_covariance()
+model.colinearity()
+model.outlier(is_output=True)
+model.feature_selection()
+model.optimal_shrinkage_covariance(is_output=True)
+'''
 
 #%%
 class logistic_regression_binary:
@@ -1432,7 +1435,7 @@ class logistic_regression_binary:
             linreg = sklearn.linear_model.LinearRegression()
             linreg.fit(self.X[:, np.arange(self.p) != i], self.X[:, i])
             R2 = linreg.score(self.X[:, np.arange(self.p) != i], self.X[:, i])
-            variance_inflation_factor[i] = 1 / (1 - R2)
+            variance_inflation_factor[i] = 1 / (1 - np.clip(R2, 0, 1-1e-5))
         self.colinearity_test["variance_inflation_factor"] = variance_inflation_factor
 
         if "VIF" in method:
@@ -2012,28 +2015,13 @@ class logistic_regression_binary:
         raise Exception("Unknown type for smoother: %s" % type)
 
 '''
-is_binary = True
-data = pd.read_csv(os.path.join(os.path.dirname(__file__), "data_from_ESL/vowel_train.csv"), index_col=0)
-X = data.iloc[:, 1:].to_numpy()
-Y = data.iloc[:, 0].to_numpy().reshape(-1, 1) - 1
-if is_binary:
-    idx = np.where(Y.flatten() <= 1)[0]
-    X = X[idx, :]; Y = Y[idx, :]
-data = pd.read_csv(os.path.join(os.path.dirname(__file__), "data_from_ESL/vowel_test.csv"), index_col=0)
-X_test = data.iloc[:, 1:].to_numpy()
-Y_test = data.iloc[:, 0].to_numpy().reshape(-1, 1) - 1
-if is_binary:
-    idx = np.where(Y_test.flatten() <= 1)[0]
-    X_test = X_test[idx, :]; Y_test = Y_test[idx, :]
-'''
-
 data = pd.read_csv(os.path.join(os.path.dirname(__file__), "data_from_ESL/south_african_heart_disease.csv"), index_col=0)
 data["famhist"] = data["famhist"].map({"Present": 1, "Absent": 0})
 X = data.iloc[:, 0:(data.shape[1]-1)].to_numpy()
 Y = data.iloc[:, -1].to_numpy().reshape(-1, 1)
 
-model = logistic_regression_binary(X, Y, X_test=None, Y_test=None, X_columns=data.columns[0:(data.shape[1]-1)], is_normalize=True, test_size_ratio=0.2)
-model.fit(is_output=False)
+#model = logistic_regression_binary(X, Y, X_test=None, Y_test=None, X_columns=data.columns[0:(data.shape[1]-1)], is_normalize=True, test_size_ratio=0.2)
+#model.fit(is_output=False)
 #_ = model.predict(X_test)
 #model.visualize_data()
 #_ = model.nonlinearity()
@@ -2044,6 +2032,181 @@ model.fit(is_output=False)
 #_ = model.feature_selection_forward_stepwise(criterion="accuracy (out-of-sample)", is_plot=True)
 #model.feature_selection_ridge_lasso(beta_threshold=1e-3, is_plot=True)
 #model.feature_selection_all(is_plot=True)
+'''
 
+#%%
+class linear_classification_spline_binary(logistic_regression_binary):
+    def __init__(self, X, Y, bs_col, bs_df, X_test=None, Y_test=None, X_columns=None, knots=None, degree=3, is_normalize=True, test_size_ratio=0.2):
+        '''
+        Linear classification with spline basis functions for binary classification.
+        params:
+            X: np.ndarray, shape (n_samples, n_features), input data
+            Y: np.ndarray, shape (n_samples,), target data
+            X_test: np.ndarray, shape (n_samples_test, n_features), test input data
+            Y_test: np.ndarray, shape (n_samples_test,), test target data
+            X_columns: list of str, column names of X
+            knots: list of float, knots for B-spline basis functions
+            degree: int, degree of B-spline basis functions
+            is_normalize: bool, whether to normalize the input data
+            test_size_ratio: float, ratio of test size to total size
+        '''
+        super().__init__(X, Y, X_test=X_test, Y_test=Y_test, X_columns=X_columns, is_normalize=is_normalize, test_size_ratio=test_size_ratio)
+
+        self.bs_col = list(range(self.p)) if bs_col is None else bs_col
+        self.bs_deg = 3
+        knots_num = bs_df + self.bs_deg + 1
+        self.knots = collections.defaultdict(dict)
+
+        self.X_columns_bs = []
+        self.X_bs = np.zeros((self.n, 0))
+        self.X_train_bs = np.zeros((self.X_train.shape[0], 0))
+        self.X_test_bs = np.zeros((self.X_test.shape[0], 0))
+        for j in range(self.p):
+            if j in self.bs_col:
+                self.X_columns_bs.extend(["{}_bs{}".format(self.X_columns[j], i) for i in range(bs_df)])
+
+                self.knots["all"][j] = np.linspace(np.min(self.X[:, j]), np.max(self.X[:, j]), knots_num + 2)[1:(knots_num + 1)]
+                bspl = spline.Bspline(self.knots["all"][j], degree=self.bs_deg)
+                self.X_bs = np.concatenate([self.X_bs, bspl.basis(self.X[:, j])], axis=1)
+
+                self.knots["train"][j] = np.linspace(np.min(self.X_train[:, j]), np.max(self.X_train[:, j]), knots_num + 2)[1:(knots_num + 1)]
+                bspl = spline.Bspline(self.knots["train"][j], degree=self.bs_deg)
+                self.X_train_bs = np.concatenate([self.X_train_bs, bspl.basis(self.X_train[:, j])], axis=1)
+
+                self.knots["test"][j] = np.linspace(np.min(self.X_test[:, j]), np.max(self.X_test[:, j]), knots_num + 2)[1:(knots_num + 1)]
+                bspl = spline.Bspline(self.knots["test"][j], degree=self.bs_deg)
+                self.X_test_bs = np.concatenate([self.X_test_bs, bspl.basis(self.X_test[:, j])], axis=1)
+
+    def fit(self, is_output=True):
+        self.logit = self._fit_logit(sm.add_constant(self.X_bs, prepend=True), self.Y.flatten(), disp=False)
+        if is_output and hasattr(self.logit, "summary"):
+            print(self.logit.summary())
+            plt.figure(figsize=(6, 6))
+            plt.subplot(2, 1, 1)
+            plt.errorbar(self.X_columns_bs, self.logit.params[1:], yerr=self.logit.bse[1:], fmt="o-")
+            plt.axhline(0, color="black", linestyle="--")
+            plt.xticks(rotation=45); plt.ylabel(r"$\beta$")
+            plt.subplot(2, 1, 2)
+            plt.bar(self.X_columns_bs, self.logit.pvalues[1:], color=["red" if p < 0.01 else "orange" if p < 0.05 else "green" for p in self.logit.pvalues[1:]])
+            plt.axhline(0.01, color="red", linestyle="--", label="0.01")
+            plt.axhline(0.05, color="orange", linestyle="--", label="0.05")
+            plt.ylim(1e-4, 1); plt.yscale("log")
+            plt.xticks(rotation=45)
+            plt.ylabel("p-value")
+            plt.suptitle("Logistic regression coefficients")
+            plt.tight_layout()
+
+        if is_output:
+            ncol = 2; nrow = int(np.ceil(len(self.X_columns) / ncol))
+            plt.figure(figsize=(3*ncol, 2*nrow))
+            for j in range(len(self.X_columns)):
+                plt.subplot(nrow, ncol, j+1)
+                col_name = self.X_columns[j]
+                col_bs_idx = [i for i in range(len(self.X_columns_bs)) if self.X_columns_bs[i].startswith(col_name)]
+                if hasattr(self.logit, "params"):
+                    coef = self.logit.params[1:][col_bs_idx].reshape((-1, 1))
+                if hasattr(self.logit, "coef_"):
+                    coef = self.logit.coef_[col_bs_idx].reshape((-1, 1))
+                x = self.X_bs[:, col_bs_idx]
+                y = x.dot(coef).flatten()
+                sort_idx = np.argsort(self.X[:, j])
+                plt.plot(self.X[sort_idx, j], y[sort_idx], linestyle="--", label="fitted", color="red")
+                plt.scatter(self.X[sort_idx, j], y[sort_idx], color="C0", s=5)
+                plt.xlabel(self.X_columns[j]); plt.ylabel(r"$\hat{f}$"+" ("+self.X_columns[j]+")")
+            plt.suptitle("Fitted B-spline basis functions")
+            plt.tight_layout()
+
+        return self.logit
+
+    def predict(self, X):
+        if not hasattr(self, "logit"):
+            raise Exception("Fit the model first")
+        if self.is_normalize:
+            X = (X - self.X_mean) / self.X_std
+
+        X_bs = np.zeros((X.shape[0], 0))
+        for j in range(self.p):
+            if j in self.bs_col:
+                bspl = spline.Bspline(self.knots["all"][j], degree=self.bs_deg)
+                X_bs = np.concatenate([X_bs, bspl.basis(X[:, j])], axis=1)
+        self.logit.predict(sm.add_constant(X_bs, prepend=True))
+        Y_pred = self.logit.predict(sm.add_constant(X_bs, prepend=True)).reshape(-1, 1)
+        Y_pred_binary = (Y_pred.flatten() >= 0.5).astype(int).reshape(-1, 1)
+        return (Y_pred, Y_pred_binary)
+
+    def visualize_data(self, methods=["pandas_describe", "raw_data_plot", "boxplot", "PCA", "MDS", "tSNE", "UMAP"], is_spline=True):
+        if is_spline:
+            X_original = self.X.copy(); Y_original = self.Y.copy(); X_columns_original = self.X_columns.copy()
+            self.X = self.X_bs.copy(); self.Y = self.Y.copy()
+            self.X_columns = self.X_columns_bs.copy()
+        super().visualize_data(methods=methods)
+        if is_spline:
+            self.X = X_original.copy(); self.Y = Y_original.copy(); self.X_columns = X_columns_original.copy()
+        
+    def nonlinearity(self, smoother_type="polynomial", method=["binned_residual", "residual", "partial_residual", "interaction_term"], is_spline=True):
+        if is_spline:
+            raise Exception("Nonlinearity analysis is not recommended for spline-based models.")
+        return super().nonlinearity(smoother_type, method)
+    
+    def colinearity(self, method=["pairwise_scatter", "pairwise_R2_corr", "VIF", "eigenvalue"], is_spline=True):
+        if is_spline:
+            X_original = self.X.copy(); Y_original = self.Y.copy(); X_columns_original = self.X_columns.copy()
+            self.X = self.X_bs.copy(); self.Y = self.Y.copy()
+            self.X_columns = self.X_columns_bs.copy()
+            self.p = self.X_bs.shape[1]
+        ans = super().colinearity(method)
+        if is_spline:
+            self.X = X_original.copy(); self.Y = Y_original.copy(); self.X_columns = X_columns_original.copy()
+            self.p = self.X.shape[1]
+        return ans
+    
+    def seperation(self, is_spline=True):
+        if is_spline:
+            X_original = self.X.copy(); Y_original = self.Y.copy(); X_columns_original = self.X_columns.copy()
+            self.X = self.X_bs.copy(); self.Y = self.Y.copy()
+            self.X_columns = self.X_columns_bs.copy()
+        ans = super().seperation()
+        if is_spline:
+            self.X = X_original.copy(); self.Y = Y_original.copy(); self.X_columns = X_columns_original.copy()
+        return ans
+
+    def outlier(self, threshold="strict", method=["pearson", "deviance", "leverage", "cook_dist", "dfbetas"], is_output=True, is_spline=True):
+        if is_spline:
+            raise Exception("Outlier analysis is not recommended for spline-based models.")
+        return super().outlier(threshold, method, is_output)
+
+    def feature_selection_all(self, is_plot=True, is_spline=True):
+        if is_spline:
+            raise Exception("Feature selection will be implemented for spline-based models in future which requires add/remove group of features.")
+        return super().feature_selection_all(is_plot)
+
+    def feature_selection_best_subset(self, criterion="accuracy (out-of-sample)", is_plot=True, is_spline=True):
+        if is_spline:
+            raise Exception("Feature selection will be implemented for spline-based models in future which requires add/remove group of features.")
+        return super().feature_selection_best_subset(criterion, is_plot)
+    
+    def feature_selection_forward_stepwise(self, criterion="accuracy (out-of-sample)", is_plot=True, is_spline=True):
+        if is_spline:
+            raise Exception("Feature selection will be implemented for spline-based models in future which requires add/remove group of features.")
+        return super().feature_selection_forward_stepwise(criterion, is_plot)
+    
+    def feature_selection_ridge_lasso(self, beta_threshold=0.001, is_plot=True, is_spline=True):
+        if is_spline:
+            raise Exception("Feature selection will be implemented for spline-based models in future which requires add/remove group of features.")
+        return super().feature_selection_ridge_lasso(beta_threshold, is_plot)
+
+data = pd.read_csv(os.path.join(os.path.dirname(__file__), "data_from_ESL/south_african_heart_disease.csv"), index_col=0)
+data["famhist"] = data["famhist"].map({"Present": 1, "Absent": 0})
+data = data[["sbp", "tobacco", "ldl", "famhist", "obesity", "age", "chd"]]
+X = data.iloc[:, 0:(data.shape[1]-1)].to_numpy()
+Y = data.iloc[:, -1].to_numpy().reshape(-1, 1)
+X_columns = data.columns[0:(data.shape[1]-1)].tolist()
+model = linear_classification_spline_binary(X, Y, bs_col=[0, 1, 2, 3, 4, 5], bs_df=4, X_columns=X_columns, is_normalize=False, test_size_ratio=0.2)
+model.fit(is_output=True)
+#Y_pred, Y_pred_binary = model.predict(X)
+#model.visualize_data_spline()
+#model.colinearity(is_spline=True)
+
+#%%
 
 

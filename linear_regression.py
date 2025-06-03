@@ -1,5 +1,5 @@
 #%%
-import os, sys, copy, scipy, datetime, tqdm, collections, itertools
+import os, sys, copy, scipy, datetime, tqdm, collections, itertools, patsy
 import numpy as np
 import pandas as pd
 
@@ -1361,16 +1361,16 @@ column_name = data.columns[:-1].tolist()
 X_test = data.iloc[:, 0:(data.shape[1]-1)].to_numpy()
 Y_test = data.iloc[:, -1].to_numpy().reshape(-1, 1)
 
-model = linear_regression(X, Y, X_test=X_test, Y_test=Y_test, X_columns=column_name, is_normalize=True, test_size_ratio=0.2)
+#model = linear_regression(X, Y, X_test=X_test, Y_test=Y_test, X_columns=column_name, is_normalize=True, test_size_ratio=0.2)
 #model.visualize_data()
-model.fit(is_output=False)
-outlier_idx = model.outlier(threshold="strict", is_output=True)["outlier_idx"]
-X_new = X[~np.isin(np.arange(X.shape[0]), outlier_idx), :]
-Y_new = Y[~np.isin(np.arange(Y.shape[0]), outlier_idx), :]
+#model.fit(is_output=False)
+#outlier_idx = model.outlier(threshold="strict", is_output=True)["outlier_idx"]
+#X_new = X[~np.isin(np.arange(X.shape[0]), outlier_idx), :]
+#Y_new = Y[~np.isin(np.arange(Y.shape[0]), outlier_idx), :]
 
-model = linear_regression(X_new, Y_new, X_test=X_test, Y_test=Y_test, X_columns=column_name, is_normalize=True, test_size_ratio=0.2)
-model.fit(is_output=False)
-model.visualize_data()
+#model = linear_regression(X_new, Y_new, X_test=X_test, Y_test=Y_test, X_columns=column_name, is_normalize=True, test_size_ratio=0.2)
+#model.fit(is_output=False)
+#model.visualize_data()
 #model.colinearity()
 #model.homoscedasticity()
 #model.test_residual_normality_independence()
@@ -1378,46 +1378,10 @@ model.visualize_data()
 #model.feature_selection_all()
 
 # %%
-class ridge_lasso_regression:
+class ridge_lasso_regression(linear_regression):
     def __init__(self, X, Y, X_test, Y_test, X_columns=None, is_normalize=True, test_size_ratio=0.2, regularization="ridge"):
-        self.X = X; self.Y = Y.reshape(-1, 1)
-        self.X_columns = X_columns if X_columns is not None else [f"feature_{i}" for i in range(X.shape[1])]
-        self.is_normalize = is_normalize
-        self.test_size_ratio = test_size_ratio
+        super().__init__(X, Y, X_test=X_test, Y_test=Y_test, X_columns=X_columns, is_normalize=is_normalize, test_size_ratio=test_size_ratio)
         self.regularization = regularization
-
-        self.n = X.shape[0]; self.p = X.shape[1]
-
-        if self.is_normalize:
-            self.X_mean = np.mean(self.X, axis=0)
-            self.X_std = np.std(self.X, axis=0, ddof=1)
-            self.Y_mean = np.mean(self.Y, axis=0)
-            self.Y_std = np.std(self.Y, ddof=1, axis=0)
-            self.X = (self.X - self.X_mean) / self.X_std
-            self.Y = (self.Y - self.Y_mean) / self.Y_std
-
-        if (X_test is not None) and (Y_test is not None):
-            self.X_train = self.X
-            self.Y_train = self.Y
-            self.X_test = X_test.copy()
-            self.Y_test = Y_test.copy().reshape(-1, 1)
-            if self.is_normalize:
-                self.X_test = (X_test.copy() - self.X_mean) / self.X_std
-                self.Y_test = (Y_test.copy().reshape(-1, 1) - self.Y_mean) / self.Y_std
-        else:
-            self.X_train = X.copy()[0:int(self.n*(1-self.test_size_ratio)), :]
-            self.Y_train = Y.copy()[0:int(self.n*(1-self.test_size_ratio)), :]
-            self.X_test = X.copy()[int(self.n*(1-self.test_size_ratio)):, :]
-            self.Y_test = Y.copy()[int(self.n*(1-self.test_size_ratio)):, :]
-            if self.is_normalize:
-                self.X_train_mean = np.mean(self.X_train, axis=0)
-                self.X_train_std = np.std(self.X_train, axis=0, ddof=1)
-                self.Y_train_mean = np.mean(self.Y_train, axis=0)
-                self.Y_train_std = np.std(self.Y_train, ddof=1, axis=0)
-                self.X_train = (self.X_train - self.X_train_mean) / self.X_train_std
-                self.Y_train = (self.Y_train - self.Y_train_mean) / self.Y_train_std
-                self.X_test = (self.X_test - self.X_train_mean) / self.X_train_std
-                self.Y_test = (self.Y_test - self.Y_train_mean) / self.Y_train_std
 
     def fit(self, alpha=None, is_output=True):
         if not alpha:
@@ -1483,53 +1447,14 @@ class ridge_lasso_regression:
 
         return alpha_list[np.argmax(R2_oss_hist)]
 
-model = ridge_lasso_regression(X_new, Y_new, X_test, Y_test, X_columns=column_name, regularization="lasso")
+#model = ridge_lasso_regression(X_new, Y_new, X_test, Y_test, X_columns=column_name, regularization="lasso")
 #model.optimal_alpha()
 #model.fit()
 
 #%%
-class principal_component_regression:
+class principal_component_regression(linear_regression):
     def __init__(self, X, Y, X_test=None, Y_test=None, X_columns=None, is_normalize=True, test_size_ratio=0.2):
-
-        self.X = X; self.Y = Y.reshape(-1, 1)
-        self.X_columns = X_columns if X_columns is not None else [f"feature_{i}" for i in range(X.shape[1])]
-        self.is_normalize = is_normalize
-        self.test_size_ratio = test_size_ratio
-
-        self.n = X.shape[0]; self.p = X.shape[1]
-        if self.n < self.p:
-            raise Exception("Number of samples is less than number of features.")
-
-        if self.is_normalize:
-            self.X_mean = np.mean(self.X, axis=0)
-            self.X_std = np.std(self.X, axis=0, ddof=1)
-            self.Y_mean = np.mean(self.Y, axis=0)
-            self.Y_std = np.std(self.Y, ddof=1, axis=0)
-            self.X = (self.X - self.X_mean) / self.X_std
-            self.Y = (self.Y - self.Y_mean) / self.Y_std
-
-        if (X_test is not None) and (Y_test is not None):
-            self.X_train = self.X
-            self.Y_train = self.Y
-            self.X_test = X_test.copy()
-            self.Y_test = Y_test.copy().reshape(-1, 1)
-            if self.is_normalize:
-                self.X_test = (X_test.copy() - self.X_mean) / self.X_std
-                self.Y_test = (Y_test.copy().reshape(-1, 1) - self.Y_mean) / self.Y_std
-        else:
-            self.X_train = X.copy()[0:int(self.n*(1-self.test_size_ratio)), :]
-            self.Y_train = Y.copy()[0:int(self.n*(1-self.test_size_ratio)), :]
-            self.X_test = X.copy()[int(self.n*(1-self.test_size_ratio)):, :]
-            self.Y_test = Y.copy()[int(self.n*(1-self.test_size_ratio)):, :]
-            if self.is_normalize:
-                self.X_train_mean = np.mean(self.X_train, axis=0)
-                self.X_train_std = np.std(self.X_train, axis=0, ddof=1)
-                self.Y_train_mean = np.mean(self.Y_train, axis=0)
-                self.Y_train_std = np.std(self.Y_train, ddof=1, axis=0)
-                self.X_train = (self.X_train - self.X_train_mean) / self.X_train_std
-                self.Y_train = (self.Y_train - self.Y_train_mean) / self.Y_train_std
-                self.X_test = (self.X_test - self.X_train_mean) / self.X_train_std
-                self.Y_test = (self.Y_test - self.Y_train_mean) / self.Y_train_std
+        super().__init__(X, Y, X_test=X_test, Y_test=Y_test, X_columns=X_columns, is_normalize=is_normalize, test_size_ratio=test_size_ratio)
 
     def fit(self, factor_num=None, is_plot=True):
         if not factor_num:
@@ -1641,52 +1566,14 @@ class principal_component_regression:
         plt.tight_layout()
         return optimal_factor_num
 
-model = principal_component_regression(X_new, Y_new, X_test=X_test, Y_test=Y_test, X_columns=column_name, is_normalize=True, test_size_ratio=0.2)
+#model = principal_component_regression(X_new, Y_new, X_test=X_test, Y_test=Y_test, X_columns=column_name, is_normalize=True, test_size_ratio=0.2)
 #model.optimal_factor_number()
-model.fit(factor_num=5, is_plot=True)
+#model.fit(factor_num=5, is_plot=True)
 
 #%%
-class partial_least_square_regression:
+class partial_least_square_regression(linear_regression):
     def __init__(self, X, Y, X_test=None, Y_test=None, X_columns=None, is_normalize=True, test_size_ratio=0.2):
-        self.X = X; self.Y = Y.reshape(-1, 1)
-        self.X_columns = X_columns if X_columns is not None else [f"feature_{i}" for i in range(X.shape[1])]
-        self.is_normalize = is_normalize
-        self.test_size_ratio = test_size_ratio
-
-        self.n = X.shape[0]; self.p = X.shape[1]
-        if self.n < self.p:
-            raise Exception("Number of samples is less than number of features.")
-
-        if self.is_normalize:
-            self.X_mean = np.mean(self.X, axis=0)
-            self.X_std = np.std(self.X, axis=0, ddof=1)
-            self.Y_mean = np.mean(self.Y, axis=0)
-            self.Y_std = np.std(self.Y, ddof=1, axis=0)
-            self.X = (self.X - self.X_mean) / self.X_std
-            self.Y = (self.Y - self.Y_mean) / self.Y_std
-
-        if (X_test is not None) and (Y_test is not None):
-            self.X_train = self.X
-            self.Y_train = self.Y
-            self.X_test = X_test.copy()
-            self.Y_test = Y_test.copy().reshape(-1, 1)
-            if self.is_normalize:
-                self.X_test = (X_test.copy() - self.X_mean) / self.X_std
-                self.Y_test = (Y_test.copy().reshape(-1, 1) - self.Y_mean) / self.Y_std
-        else:
-            self.X_train = X.copy()[0:int(self.n*(1-self.test_size_ratio)), :]
-            self.Y_train = Y.copy()[0:int(self.n*(1-self.test_size_ratio)), :]
-            self.X_test = X.copy()[int(self.n*(1-self.test_size_ratio)):, :]
-            self.Y_test = Y.copy()[int(self.n*(1-self.test_size_ratio)):, :]
-            if self.is_normalize:
-                self.X_train_mean = np.mean(self.X_train, axis=0)
-                self.X_train_std = np.std(self.X_train, axis=0, ddof=1)
-                self.Y_train_mean = np.mean(self.Y_train, axis=0)
-                self.Y_train_std = np.std(self.Y_train, ddof=1, axis=0)
-                self.X_train = (self.X_train - self.X_train_mean) / self.X_train_std
-                self.Y_train = (self.Y_train - self.Y_train_mean) / self.Y_train_std
-                self.X_test = (self.X_test - self.X_train_mean) / self.X_train_std
-                self.Y_test = (self.Y_test - self.Y_train_mean) / self.Y_train_std
+        super().__init__(X, Y, X_test=X_test, Y_test=Y_test, X_columns=X_columns, is_normalize=is_normalize, test_size_ratio=test_size_ratio)
 
     def fit(self, factor_num=None, is_output=True):
         if not factor_num:
@@ -1745,9 +1632,146 @@ class partial_least_square_regression:
             return optimal_factor_num
 
 #to be continued from here
-model = partial_least_square_regression(X_new, Y_new, X_test=X_test, Y_test=Y_test, X_columns=column_name, is_normalize=True, test_size_ratio=0.2)
+#model = partial_least_square_regression(X_new, Y_new, X_test=X_test, Y_test=Y_test, X_columns=column_name, is_normalize=True, test_size_ratio=0.2)
 #model.optimal_factor_number()
-model.fit(factor_num=5, is_output=True)
+#model.fit(factor_num=5, is_output=True)
 
 #%%
+class linear_regression_Bspline(linear_regression):
+    def __init__(self, X, Y, bs_col, bs_df, X_test=None, Y_test=None, X_columns=None, is_normalize=True, test_size_ratio=0.2):
+        super().__init__(X, Y, X_test=X_test, Y_test=Y_test, X_columns=X_columns, is_normalize=is_normalize, test_size_ratio=test_size_ratio)
+
+        self.bs_col = bs_col
+        self.bs_df = bs_df
+        if bs_df < 5:
+            raise ValueError("B-spline degree of freedom less than 5.")
+        self.knots_num = bs_df - 3 - 1 # for B-spline, df = knots_num + degree + 1
+        self.knots = dict()
+
+        self.X_columns_bs = []
+        self.X_bs = np.zeros((self.n, 0))
+        self.X_train_bs = np.zeros((self.X_train.shape[0], 0))
+        self.X_test_bs = np.zeros((self.X_test.shape[0], 0))
+        for j in range(self.p):
+            if j in self.bs_col:
+                self.X_columns_bs.extend(["{}_bs{}".format(self.X_columns[j], i) for i in range(self.bs_df)])
+
+                knots = np.linspace(np.min(self.X[:, j]), np.max(self.X[:, j]), self.knots_num + 2)[1:(self.knots_num + 1)]
+                formula = "bs(X, knots=({}), degree=3, include_intercept=False)".format(", ".join(["{:f}".format(k) for k in knots]))
+                bs = patsy.dmatrix(formula, {"X": self.X[:, j]}, return_type='matrix')
+                self.X_bs = np.hstack((self.X_bs, np.array(bs[:, 1:])))
+                self.knots["all"] = knots
+                del bs
+
+                knots = np.linspace(np.min(self.X_train[:, j]), np.max(self.X_train[:, j]), self.knots_num + 2)[1:(self.knots_num + 1)]
+                formula = "bs(X, knots=({}), degree=3, include_intercept=False)".format(", ".join(["{:f}".format(k) for k in knots]))
+                bs = patsy.dmatrix(formula, {"X": self.X_train[:, j]}, return_type='matrix')
+                self.X_train_bs = np.hstack((self.X_train_bs, np.array(bs[:, 1:])))
+                self.knots["train"] = knots
+                plt.legend()
+                del bs
+
+                knots = np.linspace(np.min(self.X_test[:, j]), np.max(self.X_test[:, j]), self.knots_num + 2)[1:(self.knots_num + 1)]
+                formula = "bs(X, knots=({}), degree=3, include_intercept=False)".format(", ".join(["{:f}".format(k) for k in knots]))
+                bs = patsy.dmatrix(formula, {"X": self.X_test[:, j]}, return_type='matrix')
+                self.X_test_bs = np.hstack((self.X_test_bs, np.array(bs[:, 1:])))
+                self.knots["test"] = knots
+                del bs
+
+            else:
+                self.X_columns_bs.append(self.X_columns[j])
+                self.X_bs = np.hstack((self.X_bs, self.X[:, j].reshape(-1, 1)))
+
+data = pd.read_csv(os.path.join(os.path.dirname(__file__), "data_from_ESL/prostate_cancer.csv"), index_col=0)
+data = data[data["train"] == "T"]
+data = data[["lcavol", "lweight", "age", "lbph", "svi", "lcp", "gleason", "pgg45", "lpsa"]]
+column_name = data.columns[:-1].tolist()
+X = data.iloc[:, 0:(data.shape[1]-1)].to_numpy()
+Y = data.iloc[:, -1].to_numpy().reshape(-1, 1)
+data = pd.read_csv(os.path.join(os.path.dirname(__file__), "data_from_ESL/prostate_cancer.csv"), index_col=0)
+data = data[data["train"] == "F"]
+data = data[["lcavol", "lweight", "age", "lbph", "svi", "lcp", "gleason", "pgg45", "lpsa"]]
+column_name = data.columns[:-1].tolist()
+X_test = data.iloc[:, 0:(data.shape[1]-1)].to_numpy()
+Y_test = data.iloc[:, -1].to_numpy().reshape(-1, 1)
+
+model = linear_regression_Bspline(X, Y, bs_col=[0], bs_df=6, X_test=X_test, Y_test=Y_test, X_columns=column_name, is_normalize=True, test_size_ratio=0.2)
+#model.visualize_data()
+#model.fit(is_output=False)
+#outlier_idx = model.outlier(threshold="strict", is_output=True)["outlier_idx"]
+#X_new = X[~np.isin(np.arange(X.shape[0]), outlier_idx), :]
+#Y_new = Y[~np.isin(np.arange(Y.shape[0]), outlier_idx), :]
+
+
+#%%
+import numpy as np
+import matplotlib.pyplot as plt
+from patsy import dmatrix
+import statsmodels.api as sm
+
+# Data
+x = np.linspace(0, 10, 100)
+y = np.sin(x) + 0.2 * np.random.randn(100)
+
+# Create natural cubic spline basis
+#x_basis = dmatrix("cr(x, df=5)", {"x": x}, return_type='dataframe')
+x_basis = dmatrix("bs(x, knots=(3, 6), degree=3, include_intercept=False)", {"x": x})
+# Fit linear model on spline basis
+model = sm.OLS(y, x_basis).fit()
+# Predict
+y_pred = model.predict(x_basis)
+
+# Plot
+'''
+plt.scatter(x, y, alpha=0.4, label='Data')
+plt.plot(x, y_pred, 'r', label='Natural Cubic Spline')
+plt.legend()
+plt.title("Natural Cubic Spline Regression")
+plt.show()
+'''
+
+for i in range(x_basis.shape[1]):
+    plt.plot(x, x_basis[:, i], label=f'Basis {i+1}')
+
+#%%
+print(x_basis.shape)
+#np.array(x_basis)
+x_basis
+
+
+#%%
+import numpy as np
+import matplotlib.pyplot as plt
+from scipy.interpolate import CubicSpline
+
+# Example knots (x values where spline pieces join)
+x_knots = np.array([0, 1, 2.5, 4, 6, 8, 10])
+y_knots = np.sin(x_knots)  # values at knots
+
+# Natural cubic spline interpolation
+spline = CubicSpline(x_knots, y_knots, bc_type='natural')
+
+# Evaluate
+x_dense = np.linspace(0, 10, 200)
+y_dense = spline(x_dense)
+
+# Plot
+plt.plot(x_knots, y_knots, 'o', label='Knots')
+plt.plot(x_dense, y_dense, '-', label='Natural cubic spline')
+plt.legend()
+plt.grid(True)
+plt.title("Natural Cubic Spline with Custom Knots")
+plt.show()
+
+#%%
+np.array()
+
+
+
+# %%
+
+
+
+
+
 
